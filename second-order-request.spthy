@@ -1,0 +1,485 @@
+/*
+ *  Model Name: second-order-exchange.pthy
+ *  Status: DEVELOPMENTAL
+ *
+ *  Comments:
+
+    We model with following abstractions:
+    - Timestamps are modeled as nonces.
+    - Instead of requesting a DRKey with val_time as a field,
+      epoch is provided. Epoch can be seen as the validity period
+      which is mapped to by val_time.
+
+ */
+
+theory SO
+begin
+
+builtins: asymmetric-encryption, signing, symmetric-encryption
+
+functions: drkey/2, drkey_so/3, secret_value/2, exp_time/1
+
+/*
+  drkey(sv_A, B):  pseudo random function with secret sv_A used to derive
+                    DRKey K_{A->B}
+  drkey_so(K_A->B, H_A, H_B): pseudo random function with secret K_{A->B}
+                    used to derive second order DRKey K_{A:HA->B:HB}
+  secret_value(ltk, epoch): Mapping epoch to secret value. Epochs are used
+                    to abstract the val_time field in the request.
+  exp_time(epoch): mapping epoch to expiration time.
+*/
+
+
+// Public key infrastructure
+rule Register_pk:
+    [ Fr(~ltk)
+    ]
+  --[ OnlyOnceV(<'Register_pk', $AS>)
+    , RegisterAS($AS)
+    ]->
+    [ !Ltk($AS, ~ltk)
+    , !Pk($AS, pk(~ltk))
+    , Out(pk(~ltk)) 
+    ]
+
+// dynamic compromise of long-term private keys
+rule Reveal_ltk:
+    [ !Ltk(AS, ltk)] 
+  --[ Reveal(AS) ]-> 
+    [ Out(ltk) ]
+
+rule Register_epoch:
+    [ Fr(~epoch) ]
+  --[ RegisterEpoch(~epoch) ]->
+    [ !Epoch(~epoch)
+    , Out(~epoch)
+    ]
+
+// AS-Endhost
+rule Register_host:
+    [ !Pk($A, pkA)]
+  --[ OnlyOnceV(<'Register_AS_host', $A, $E>)
+    , OnlyOnceV(<'Register_host', $E>)
+    , ASExists($A)
+    , RegisterHost($E)
+    ]->
+    [ !AsHostMapping($A, $E)]
+
+// Abstract secret channel
+rule ChanOut_S:
+    [ Out_S($A,$B,x) ]
+  --[ ChanOut_S($A,$B,x) ]->
+    [ !Sec($A,$B,x) ]
+
+rule ChanIn_S:
+    [ !Sec($A,$B,x) ]
+  --[ ChanIn_S($A,$B,x) ]->
+    [ In_S($A,$B,x) ]
+
+
+//------------------------------------------------
+// AS to AS exchange
+//------------------------------------------------
+
+///////////////
+// INIT PHASE
+///////////////
+
+rule ASAS_A_init:
+    [ Fr(~id)
+    , !Ltk(A, ~ltkA)
+    , !Epoch(epoch)
+    ]
+  --[ Create(A, ~id, 'AS_L')
+    ]->
+    [ St_A_0(A, ~id, ~ltkA, epoch)
+    ]  
+
+rule ASAS_B_init:
+    [ Fr(~id)
+    , !Ltk(B, ~ltkB)
+    , !Epoch(epoch)
+    ]
+  --[ Create(B, ~id, 'AS_R')
+    ]->
+    [ St_B_0(B, ~id, ~ltkB, epoch)
+    ]
+
+
+
+/////////////////
+// REQUEST PHASE
+/////////////////
+
+rule ASAS_B_send:
+  let req = <A, epoch, ~nB>
+      sig = sign(req, ltkB)
+      msg = <req, sig>
+  in
+    [ St_B_0(B, id, ltkB, epoch)
+    , !Pk(A, pkA)
+    , Fr(~nB)
+    ]
+  --[ Send(B, msg)  
+    ]->
+    [ St_B_1(B, id, ltkB, epoch, A, ~nB)
+    , Out(msg)
+    ]
+
+rule ASAS_A_receive:
+  let req = <A, epoch, nB>
+  in
+    [ St_A_0(A, id, ltkA, epoch)
+    , !Pk(B, pkB)
+    , In(<req, sig>)
+    ]
+  --[ Recv(A, <req, sig>) 
+    , Eq(verify(sig, req, pkB), true)
+    ]->
+    [ St_A_1(A, id, ltkA, epoch, B, nB)
+    ]
+
+/////////////////
+// RESPONSE PHASE
+/////////////////
+
+rule ASAS_A_send:
+  let svA = secret_value(ltkA, epoch)
+      key = drkey(svA, B)
+      cipher = aenc(<key, A>, pkB)
+      rep = <cipher, exp_time(epoch), nB>
+      sig = sign(rep, ltkA)
+      msg = <rep, sig>
+  in
+    [ St_A_1(A, id, ltkA, epoch, B, nB)
+    , !Pk(B, pkB)
+    ]
+  --[ Send(A, msg) 
+    , Running(A, B, <'AS_L', 'AS_R', <nB, key>>)
+    , Finish(A, B, key)
+    ]->
+    [ St_A_2(A, id, ltkA, epoch, B, nB)
+    , Out(msg)
+    ]
+
+rule ASAS_B_receive:
+  let rep = <aenc(<key, A>, pk(ltkB)), exp, nB>
+      msg = <rep, sig>
+  in
+    [ St_B_1(B, id, ltkB, epoch, A, nB) 
+    , !Pk(A, pkA)
+    , In(msg)
+    ]
+  --[ Recv(B, msg)
+    , Eq(verify(sig, rep, pkA), true)
+    , Eq(exp_time(epoch), exp)
+    , Commit(B, A, <'AS_L', 'AS_R', <nB, key>>) 
+    , Honest(A), Honest(B)
+    , Secret(B, key)
+    , Finish(B, A, key)
+    ]->
+    [ St_B_2(B, id, ltkB, epoch, A, nB, key)
+    ]
+
+
+rule ASAS_to_ASHOST_REMOTE:
+    [ St_B_2(B, id, ltkB, epoch, A, nB, key) ]
+  --[ Transform(B, id, 'remote') ]->
+    [ St_AS_R_0(B, id, epoch, A, key) ]
+
+
+rule ASAS_to_ASHOST_LOCAL:
+    [ St_A_2(A, id, ltkA, epoch, B, nB) ]
+  --[ Transform(A, id, 'local') ]->
+    [ St_AS_L_0(A, id, epoch, B, ltkA) ]
+
+
+//------------------------------------------------
+// AS to Endhost exchange
+//------------------------------------------------
+
+///////////////
+// Local Key
+///////////////
+
+rule ASHOST_L_init:
+    [ Fr(~id)
+    , !AsHostMapping(AS_L, L)
+    , !AsHostMapping(AS_R, R) 
+    , !Epoch(epoch)
+    ]
+  --[ Create(L, ~id, 'L')
+    , NotEq(AS_L, AS_R)
+    ]->
+    [ St_L_0(L, ~id, epoch, AS_L, AS_R, R) 
+    ]
+
+rule ASHOST_L_request:   // Request Key AS_L:L -> AS_R:R
+  let key_type = '2'
+      src = <AS_L, L>
+      dst = <AS_R, R>
+      add = 'none'
+      req = <key_type, ~req_id, 'protocol', src, dst, add>
+      msg = <'L_to_AS', req, epoch, ~nH>
+  in
+    [ St_L_0(L, id, epoch, AS_L, AS_R, R)
+    , Fr(~req_id)
+    , Fr(~nH)
+    ]
+  --[ Send(L, msg)
+    , Secret_I(msg)
+    ]->
+    [ St_L_1(L, id, epoch, AS_L, AS_R, R, ~req_id, ~nH)
+    , Out_S(L, AS_L, msg)
+    ]
+ 
+rule ASHOST_AS_L_receive:
+  let src = <AS_L, L>
+      dst = <AS_R, R>
+      msg = <'L_to_AS',<key_type, req_id, proto, src, dst, add>, epoch, nH>
+      key = drkey_so(drkey(secret_value(ltk, epoch), AS_R), L, R)
+  in
+    [ St_AS_L_0(AS_L, id, epoch, AS_R, ltk)
+    , In_S(L, AS_L, msg)
+    , !AsHostMapping(AS_R, R)
+    , !AsHostMapping(AS_L, L)
+    ]
+  --[ Recv(AS_L, msg)
+    , Secret_R(msg)
+    , Authentic(L, msg)
+    ]->
+    [ St_AS_L_1(AS_L, id, epoch, AS_R, ltk, L, nH, req_id, key)
+    ]
+
+rule ASHOST_AS_L_send:
+  let msg = <'AS_to_L', req_id, key, exp_time(epoch), nH>
+  in
+    [ St_AS_L_1(AS_L, id, epoch, AS_R, ltk, L, nH, req_id, key)
+    ]
+  --[ Send(AS_L, msg)
+    , Secret_I(msg) 
+    ]->
+    [ St_AS_L_2(AS_L, id, epoch, AS_R, ltk, L, nH, req_id, key)
+    , Out_S(AS_L, L, msg)
+    ]
+
+rule ASHOST_L_receive:
+  let msg = <'AS_to_L', req_id, key, exp, nH>
+  in
+    [ St_L_1(L, id, epoch, AS_L, AS_R, R, req_id, nH)
+    , In_S(AS_L, L, msg)
+    ]
+  --[ Recv(L, msg)
+    , Secret_R(msg)
+    , Eq(exp, exp_time(epoch))
+    , Authentic(AS_L, msg)
+    , Secret(L, key)
+    , Honest(L), Honest(AS_L), Honest(AS_R), Honest(R)
+    , FinishHost(L,'L', <epoch, AS_L, L, AS_R, R, key>)
+    ]->
+    [ St_L_2(L, id, epoch, AS_L, AS_R, R, key)
+    ]
+
+///////////////
+// Remote Key
+///////////////
+
+rule ASHOST_R_init:
+    [ Fr(~id)
+    , !AsHostMapping(AS_L, L)
+    , !AsHostMapping(AS_R, R) 
+    , !Epoch(epoch)
+    ]
+  --[ Create(R, ~id, 'R')
+    , NotEq(AS_L, AS_R)
+    ]->
+    [ St_R_0(R, ~id, epoch, AS_R, AS_L, L) 
+    ]
+
+rule ASHOST_R_request:   // Request Key AS_L:L -> AS_R:R
+  let key_type = '2'
+      src = <AS_L, L>
+      dst = <AS_R, R>
+      add = 'none'
+      req = <key_type, ~req_id, 'protocol', src, dst, add>
+      msg = <'R_to_AS', req, epoch, ~nH>
+  in
+    [ St_R_0(R, id, epoch, AS_R, AS_L, L)
+    , Fr(~req_id)
+    , Fr(~nH)
+     ]
+  --[ Send(R, msg)
+    , Secret_I(msg)
+    ]->
+    [ St_R_1(R, id, epoch, AS_R, AS_L, L, ~req_id, ~nH)
+    , Out_S(R, AS_R, msg)
+    ]
+
+rule ASHOST_AS_R_receive:
+  let src = <AS_L, L>
+      dst = <AS_R, R>
+      msg = <'R_to_AS',<key_type, req_id, proto, src, dst, add>, epoch, nH>
+      so_key = drkey_so(key, L, R)
+  in
+    [ St_AS_R_0(AS_R, id, epoch, AS_L, key) 
+    , In_S(R, AS_R, msg)
+    , !AsHostMapping(AS_L, L)
+    , !AsHostMapping(AS_R, R)
+    ]
+  --[ Recv(AS_R, msg)
+    , Secret_R(msg)
+    , Authentic(R, msg)
+    ]->
+    [ St_AS_R_1(AS_R, id, epoch, AS_L, key, R, nH, req_id, so_key) 
+    ]
+
+rule ASHOST_AS_R_send:
+  let msg = <'AS_to_R', req_id, so_key, exp_time(epoch), nH>
+  in
+    [ St_AS_R_1(AS_R, id, epoch, AS_L, key, R, nH, req_id, so_key)
+    ]
+  --[ Send(AS_R, msg)
+    , Secret_I(msg) 
+    ]->
+    [ St_AS_R_2(AS_R, id, epoch, AS_L, key, R, nH, req_id, so_key)
+    , Out_S(AS_R, R, msg)
+    ]
+
+rule ASHOST_R_receive:
+  let msg = <'AS_to_R', req_id, key, exp, nH>
+  in
+    [ St_R_1(R, id, epoch, AS_R, AS_L, L, req_id, nH)
+    , In_S(AS_R, R, msg)
+    ]
+  --[ Recv(R, msg)
+    , Eq(exp, exp_time(epoch))
+    , Secret_R(msg)
+    , Authentic(AS_R, msg)
+    , Secret(R, key)
+    , Honest(L), Honest(AS_L), Honest(AS_R), Honest(R)
+    , FinishHost(R, 'R', <epoch, AS_L, L, AS_R, R, key>)
+    ]->
+    [ St_R_2(R, id, epoch, AS_R, AS_L, L, req_id, nH, key)
+    ]
+
+
+/////////////////
+// RESTRICTIONS
+/////////////////
+
+restriction Equality:
+  "All x y #i. Eq(x,y) @#i ==> x = y"
+
+restriction Inequality:
+  "All x y #i. NotEq(x,y) @#i ==> not(x = y)"
+
+restriction ExistingAS:
+  "All A #i. ASExists(A) @#i ==> (Ex #j. RegisterAS(A) @#j & #j < #i)"
+
+restriction OnlyOnceV:
+  "All #i #j x. OnlyOnceV(x)@#i & OnlyOnceV(x)@#j ==> #i = #j"
+
+
+
+/////////////////
+// LEMMAS
+/////////////////
+
+// check functionality of modeled protocol
+lemma AS_executable_key_agreement:
+  exists-trace
+  "Ex a b ida idb na #i #j #k #l.
+    Finish(a, b, na) @i & Finish(b, a, na) @j & (not a=b)
+    & Create(a, ida, 'AS_L')@k & Create(b, idb, 'AS_R')@l
+    & not (Ex X #r. Reveal(X) @r)
+    & not (Ex X id #r. Create(X, id, 'AS_L') @r & (not id = ida))
+    & not (Ex X id #r. Create(X, id, 'AS_R') @r & (not id = idb))
+  "
+
+lemma HOST_executable_local_key_fetch:
+  exists-trace
+  "Ex l r al ar idl idal idar key epoch #i #cl #cal #car #tal.
+    FinishHost(l, 'L', <epoch, al, l, ar, r, key>) @i 
+    & Create(l, idl, 'L') @cl
+    & Create(al, idal, 'AS_L') @cal
+    & Create(ar, idar, 'AS_R') @car
+    & Transform(al, idal, 'local') @tal
+    & not (Ex X idx #r. Create(X, idx, 'L')@r & (not idx = idl))
+    & not (Ex X idx #r. Create(X, idx, 'AS_L')@r & (not idx = idal))
+    & not (Ex X idx #r. Create(X, idx, 'AS_R')@r & (not idx = idar))
+    & not (Ex X #r. Reveal(X) @r)
+  "
+
+lemma HOST_executable_remote_key_fetch:
+  exists-trace
+  "Ex l r al ar idr idal idar key epoch #i #cr #cal #car #tar.
+    FinishHost(r, 'R', <epoch, al, l, ar, r, key>) @i 
+    & Create(r, idr, 'R') @cr
+    & Create(al, idal, 'AS_L') @cal
+    & Create(ar, idar, 'AS_R') @car
+    & Transform(ar, idar, 'remote') @tar
+    & not (Ex X idx #r. Create(X, idx, 'R')@r & (not idx = idr))
+    & not (Ex X idx #r. Create(X, idx, 'AS_L')@r & (not idx = idal))
+    & not (Ex X idx #r. Create(X, idx, 'AS_R')@r & (not idx = idar))
+    & not (Ex X #r. Reveal(X) @r)
+  "
+
+
+lemma HOST_executable_hosts_agree:
+  exists-trace
+  "Ex l r al ar idl idr key epoch #i #j #cl #cr.
+    FinishHost(l, 'L', <epoch, al, l, ar, r, key>) @i 
+    & FinishHost(r, 'R', <epoch, al, l, ar, r, key>) @j
+    & Create(l, idl, 'L')@cl & Create(r, idr, 'R')@cr
+    & not (Ex x idx #r. Create(x, idx, 'L') @r & not (idx = idl))
+    & not (Ex x idx #r. Create(x, idx, 'R') @r & not (idx = idr))
+    & (not l = r) & not (Ex X #r. Reveal(X) @r)
+  "
+
+lemma HOST_hosts_agree:
+  "All l r al ar key_l key_r epoch #i #j.
+    FinishHost(l, 'L', <epoch, al, l, ar, r, key_l>) @i 
+    & FinishHost(r, 'R', <epoch, al, l, ar, r, key_r>) @j
+    & (not l = r) 
+    ==> (key_l = key_r)
+        | (Ex X #r. Reveal(X) @r & (Honest(X) @i | Honest(X) @j))
+  "
+
+lemma secrecy:
+  "All A x #i. 
+    Secret(A,x) @i ==> 
+    not (Ex #j. K(x)@j)
+        | (Ex X #r. Reveal(X)@r & Honest(X) @i)"
+
+lemma noninjectiveagreementINITIATOR:
+  "All a b t #i.
+    Commit(a,b,<'AS_L','AS_R',t>) @i
+    ==> (Ex #j. Running(b,a,<'AS_L','AS_R',t>) @j)
+        | (Ex X #r. Reveal(X)@r & Honest(X) @i)"
+
+
+lemma injectiveagreementINITIATOR:
+  "All a b t #i. 
+    Commit(a,b,<'AS_L','AS_R',t>) @i
+    ==> (Ex #j. Running(b,a,<'AS_L','AS_R',t>) @j 
+        & j < i
+        & not (Ex a2 b2 #i2. Commit(a2,b2,<'AS_L','AS_R',t>) @i2
+                           & not (#i2 = #i)))
+              | (Ex X #r. Reveal(X)@r & Honest(X) @i)"
+
+
+
+// Abstract Secure Channel lemmas
+lemma CHAN_secret_initiator: 
+    "All n #i #j. Secret_I(n) @i & K(n) @j ==> F"
+
+lemma CHAN_secret_receiver: 
+    "All n #i #j. Secret_R(n) @i & K(n) @j ==> F"
+
+lemma CHAN_message_authentication: 
+    "All I n #j. Authentic(I,n) @j ==> Ex #i. Send(I,n) @i &i<j"
+
+
+
+
+end

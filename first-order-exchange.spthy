@@ -1,0 +1,208 @@
+/*
+ *  Model Name: first-order-exchange.pthy
+ *  Status: DEVELOPMENTAL
+ *
+ *  Comments:
+ *
+ *  We model with following abstractions:
+ *  - Timestamps are modeled as nonces
+ *  - There is no prefetching mechanism. This can be argued, 
+ *      since the next secret value is unrelated from the current
+ *      one.
+ *
+ *
+ *  Modeled messages:
+ *
+ *  B -> A: A, B, nA, sign((A, nA), ltkB)
+ *  A: ciphertext = aenc((A, drkey(svA, B)), pkA)
+ *  A: signature = sign((ciphertext, exp_time(drkey(svA, B), nA), ltkA)
+ *  A -> B: ciphertext, exp_time(drkey(svA, B)), signature 
+ *
+ * 
+ */
+
+theory FO
+begin
+
+builtins: asymmetric-encryption, signing
+
+functions: drkey/2, exp_time/1
+
+
+
+// Public key infrastructure
+rule Register_pk:
+  [ Fr(~ltk)
+  , Fr(~sv) 
+  ]
+--[ OnlyOnceV(<'Register_pk', $AS>)
+  ]->
+  [ !Ltk($AS, ~ltk)
+  , !SV($AS, ~sv)
+  , !Pk($AS, pk(~ltk))
+  , Out(pk(~ltk)) 
+  ]
+
+// dynamic compromise of long-term private keys
+rule Reveal_ltk:
+  [ !Ltk(AS, ltk), !SV(AS, sv) ] --[ Reveal(AS) ]-> [ Out(<ltk, sv>) ]
+
+///////////////
+// INIT PHASE
+///////////////
+
+rule A_init:
+    [ Fr(~id)
+    , !Ltk(A, ~ltkA)
+    , !SV(A, svA)
+    ]
+  --[ Create(A, ~id, 'R')
+    ]->
+    [ St_A_0(A, ~id, ~ltkA, svA)
+    ]  
+
+rule B_init:
+  	[ Fr(~id)
+  	, !Ltk(B, ~ltkB)
+  	]
+  --[ Create(B, ~id, 'I')
+  	]->
+  	[ St_B_0(B, ~id, ~ltkB)
+  	]
+
+
+
+/////////////////
+// REQUEST PHASE
+/////////////////
+
+rule B_send:
+  let req = <A, ~nB>
+  	  sig = sign(req, ltkB)
+  	  msg = <req, sig>
+  in
+    [ St_B_0(B, id, ltkB)
+    , !Pk(A, pkA)
+    , Fr(~nB)
+    ]
+  --[ Send(B, msg)  
+    ]->
+    [ St_B_1(B, id, ltkB, A, ~nB)
+    , Out(msg)
+    ]
+
+rule A_receive:
+    [ St_A_0(A, id, ltkA, svA)
+    , !Pk(B, pkB)
+    , In(<<A, nB>, sig>)
+    ]
+  --[ Recv(A, <<A, nB>, sig>) 
+    , Eq(verify(sig, <A, nB>, pkB), true)
+    ]->
+    [ St_A_1(A, id, ltkA, svA, B, nB)
+    ]
+
+/////////////////
+// RESPONSE PHASE
+/////////////////
+
+rule A_send:
+  let key = drkey(svA, B)
+      cipher = aenc(<key, A>, pkB)
+      rep = <cipher, exp_time(key), nB>
+   	  sig = sign(rep, ltkA)
+   	  msg = <rep, sig>
+  in
+    [ St_A_1(A, id, ltkA, svA, B, nB)
+    , !Pk(B, pkB)
+    ]
+  --[ Send(A, msg) 
+  	, Running(A, B, <'I', 'R', <nB, key>>)
+    , Finish(A, B, key)
+    ]->
+    [ St_A_2(A, id, ltkA, svA, B, nB)
+    , Out(msg)
+    ]
+
+rule B_receive:
+  let rep = <aenc(<key, A>, pk(ltkB)), exp, nB>
+      msg = <rep, sig>
+  in
+    [ St_B_1(B, id, ltkB, A, nB) 
+    , !Pk(A, pkA)
+    , In(msg)
+    ]
+  --[ Recv(B, msg)
+    , Eq(verify(sig, rep, pkA), true)
+    , Commit(B, A, <'I', 'R', <nB, key>>) 
+    , Honest(A), Honest(B)
+    , Secret(B, key)
+    , Finish(B, A, key)
+    ]->
+    [ St_B_2(B, id, ltkB, A, nB, key)
+    ]
+
+
+/////////////////
+// RESTRICTIONS
+/////////////////
+
+// used to check equality between values
+// (e.g. comparison of decryption of an encrypted value to its original value)
+restriction Equality:
+  "All x y #i. Eq(x,y) @#i ==> x = y"
+
+// used to check that a variable occurs only once
+restriction OnlyOnceV:
+  "All #i #j x. OnlyOnceV(x)@#i & OnlyOnceV(x)@#j ==> #i = #j"
+
+/////////////////
+// LEMMAS
+/////////////////
+
+// check functionality of modeled protocol
+lemma executable:
+  exists-trace
+  "Ex a b ida idb na #i #j #k #l.
+     Finish(a, b, na) @i & Finish(b, a, na) @j & (not a=b)
+     & Create(a, ida, 'I')@k & Create(b, idb, 'R')@l
+     & not (Ex X #r. Reveal(X) @r)
+     & not (Ex X id #r. Create(X, id, 'I') @r & (not id = ida))
+     & not (Ex X id #r. Create(X, id, 'R') @r & (not id = idb))
+  "
+
+// whenever a secret action Secret(x) occurs at timepoint i,
+// the adversary does not know x or an agent claimed to be
+// honest at time point i that has been compromised at a timepoint r
+lemma secrecy:
+  "All A x #i. 
+    Secret(A,x) @i ==> 
+    not (Ex #j. K(x)@j)
+        | (Ex X #r. Reveal(X)@r & Honest(X) @i)"
+
+// following Lowe's hierachy of authentication specifications
+lemma noninjectiveagreementINITIATOR:
+  "All a b t #i.
+    Commit(a,b,<'I','R',t>) @i
+    ==> (Ex #j. Running(b,a,<'I','R',t>) @j)
+        | (Ex X #r. Reveal(X)@r & Honest(X) @i)"
+
+
+lemma injectiveagreementINITIATOR:
+  "All a b t #i. 
+    Commit(a,b,<'I','R',t>) @i
+    ==> (Ex #j. Running(b,a,<'I','R',t>) @j 
+        & j < i
+        & not (Ex a2 b2 #i2. Commit(a2,b2,<'I','R',t>) @i2
+                           & not (#i2 = #i)))
+              | (Ex X #r. Reveal(X)@r & Honest(X) @i)"
+
+lemma uniqueKey:
+  "All a b nB key #i.
+    Commit(b, a, <'I', 'R', <nB, key>>) @i
+    ==> not (Ex c mB #j. Commit(b, c, <'I', 'R', <mB, key>>) @j & (not c = a))
+        | (Ex X #r. Reveal(X)@r & Honest(X) @i)
+  "
+
+
+end

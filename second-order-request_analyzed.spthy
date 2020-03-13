@@ -1,0 +1,2128 @@
+theory SO begin
+
+// Function signature and definition of the equational theory E
+
+functions: adec/2, aenc/2, drkey/2, drkey_so/3, exp_time/1, fst/1,
+           pair/2, pk/1, sdec/2, secret_value/2, senc/2, sign/2, snd/1, true/0,
+           verify/3
+equations:
+    adec(aenc(x.1, pk(x.2)), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2,
+    verify(sign(x.1, x.2), x.1, pk(x.2)) = true
+
+rule (modulo E) Register_pk:
+   [ Fr( ~ltk ) ]
+  --[ OnlyOnceV( <'Register_pk', $AS> ), RegisterAS( $AS ) ]->
+   [ !Ltk( $AS, ~ltk ), !Pk( $AS, pk(~ltk) ), Out( pk(~ltk) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Reveal_ltk:
+   [ !Ltk( AS, ltk ) ] --[ Reveal( AS ) ]-> [ Out( ltk ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Register_epoch:
+   [ Fr( ~epoch ) ]
+  --[ RegisterEpoch( ~epoch ) ]->
+   [ !Epoch( ~epoch ), Out( ~epoch ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Register_host:
+   [ !Pk( $A, pkA ) ]
+  --[
+  OnlyOnceV( <'Register_AS_host', $A, $E> ),
+  OnlyOnceV( <'Register_host', $E> ), ASExists( $A ), RegisterHost( $E )
+  ]->
+   [ !AsHostMapping( $A, $E ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ChanOut_S:
+   [ Out_S( $A, $B, x ) ]
+  --[ ChanOut_S( $A, $B, x ) ]->
+   [ !Sec( $A, $B, x ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ChanIn_S:
+   [ !Sec( $A, $B, x ) ] --[ ChanIn_S( $A, $B, x ) ]-> [ In_S( $A, $B, x ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASAS_A_init:
+   [ Fr( ~id ), !Ltk( A, ~ltkA ), !Epoch( epoch ) ]
+  --[ Create( A, ~id, 'AS_L' ) ]->
+   [ St_A_0( A, ~id, ~ltkA, epoch ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASAS_B_init:
+   [ Fr( ~id ), !Ltk( B, ~ltkB ), !Epoch( epoch ) ]
+  --[ Create( B, ~id, 'AS_R' ) ]->
+   [ St_B_0( B, ~id, ~ltkB, epoch ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASAS_B_send:
+   [ St_B_0( B, id, ltkB, epoch ), !Pk( A, pkA ), Fr( ~nB ) ]
+  --[ Send( B, <<A, epoch, ~nB>, sign(<A, epoch, ~nB>, ltkB)> ) ]->
+   [
+   St_B_1( B, id, ltkB, epoch, A, ~nB ),
+   Out( <<A, epoch, ~nB>, sign(<A, epoch, ~nB>, ltkB)> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASAS_A_receive:
+   [
+   St_A_0( A, id, ltkA, epoch ), !Pk( B, pkB ), In( <<A, epoch, nB>, sig> )
+   ]
+  --[
+  Recv( A, <<A, epoch, nB>, sig> ),
+  Eq( verify(sig, <A, epoch, nB>, pkB), true )
+  ]->
+   [ St_A_1( A, id, ltkA, epoch, B, nB ) ]
+
+  /*
+  rule (modulo AC) ASAS_A_receive:
+     [
+     St_A_0( A, id, ltkA, epoch ), !Pk( B, pkB ), In( <<A, epoch, nB>, sig> )
+     ]
+    --[ Recv( A, <<A, epoch, nB>, sig> ), Eq( z, true ) ]->
+     [ St_A_1( A, id, ltkA, epoch, B, nB ) ]
+    variants (modulo AC)
+    1. A     = A.10
+       epoch = epoch.10
+       nB    = nB.10
+       pkB   = pkB.10
+       sig   = sig.10
+       z     = verify(sig.10, <A.10, epoch.10, nB.10>, pkB.10)
+    
+    2. A     = x.10
+       epoch = x.11
+       nB    = x.13
+       pkB   = pk(x.12)
+       sig   = sign(<x.10, x.11, x.13>, x.12)
+       z     = true
+  */
+
+rule (modulo E) ASAS_A_send:
+   [ St_A_1( A, id, ltkA, epoch, B, nB ), !Pk( B, pkB ) ]
+  --[
+  Send( A,
+        <
+         <aenc(<drkey(secret_value(ltkA, epoch), B), A>, pkB), exp_time(epoch), nB
+         >, 
+         sign(<aenc(<drkey(secret_value(ltkA, epoch), B), A>, pkB), 
+               exp_time(epoch), nB>,
+              ltkA)
+        >
+  ),
+  Running( A, B, <'AS_L', 'AS_R', nB, drkey(secret_value(ltkA, epoch), B)>
+  ),
+  Finish( A, B, drkey(secret_value(ltkA, epoch), B) )
+  ]->
+   [
+   St_A_2( A, id, ltkA, epoch, B, nB ),
+   Out( <
+         <aenc(<drkey(secret_value(ltkA, epoch), B), A>, pkB), exp_time(epoch), nB
+         >, 
+         sign(<aenc(<drkey(secret_value(ltkA, epoch), B), A>, pkB), 
+               exp_time(epoch), nB>,
+              ltkA)
+        >
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASAS_B_receive:
+   [
+   St_B_1( B, id, ltkB, epoch, A, nB ), !Pk( A, pkA ),
+   In( <<aenc(<key, A>, pk(ltkB)), exp, nB>, sig> )
+   ]
+  --[
+  Recv( B, <<aenc(<key, A>, pk(ltkB)), exp, nB>, sig> ),
+  Eq( verify(sig, <aenc(<key, A>, pk(ltkB)), exp, nB>, pkA), true ),
+  Eq( exp_time(epoch), exp ), Commit( B, A, <'AS_L', 'AS_R', nB, key> ),
+  Honest( A ), Honest( B ), Secret( B, key ), Finish( B, A, key )
+  ]->
+   [ St_B_2( B, id, ltkB, epoch, A, nB, key ) ]
+
+  /*
+  rule (modulo AC) ASAS_B_receive:
+     [
+     St_B_1( B, id, ltkB, epoch, A, nB ), !Pk( A, pkA ),
+     In( <<aenc(<key, A>, pk(ltkB)), exp, nB>, sig> )
+     ]
+    --[
+    Recv( B, <<aenc(<key, A>, pk(ltkB)), exp, nB>, sig> ), Eq( z, true ),
+    Eq( exp_time(epoch), exp ), Commit( B, A, <'AS_L', 'AS_R', nB, key> ),
+    Honest( A ), Honest( B ), Secret( B, key ), Finish( B, A, key )
+    ]->
+     [ St_B_2( B, id, ltkB, epoch, A, nB, key ) ]
+    variants (modulo AC)
+    1. A     = A.22
+       exp   = exp.25
+       key   = key.27
+       ltkB  = ltkB.28
+       nB    = nB.29
+       pkA   = pkA.30
+       sig   = sig.31
+       z     = verify(sig.31,
+                      <aenc(<key.27, A.22>, pk(ltkB.28)), exp.25, nB.29>, pkA.30)
+    
+    2. A     = A.30
+       exp   = exp.33
+       key   = key.35
+       ltkB  = ltkB.36
+       nB    = nB.37
+       pkA   = pk(x.58)
+       sig   = sign(<aenc(<key.35, A.30>, pk(ltkB.36)), exp.33, nB.37>, x.58)
+       z     = true
+  */
+
+rule (modulo E) ASAS_to_ASHOST_REMOTE:
+   [ St_B_2( B, id, ltkB, epoch, A, nB, key ) ]
+  --[ Transform( B, id, 'remote' ) ]->
+   [ St_AS_R_0( B, id, epoch, A, key ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASAS_to_ASHOST_LOCAL:
+   [ St_A_2( A, id, ltkA, epoch, B, nB ) ]
+  --[ Transform( A, id, 'local' ) ]->
+   [ St_AS_L_0( A, id, epoch, B, ltkA ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_L_init:
+   [
+   Fr( ~id ), !AsHostMapping( AS_L, L ), !AsHostMapping( AS_R, R ),
+   !Epoch( epoch )
+   ]
+  --[ Create( L, ~id, 'L' ), NotEq( AS_L, AS_R ) ]->
+   [ St_L_0( L, ~id, epoch, AS_L, AS_R, R ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_L_request:
+   [ St_L_0( L, id, epoch, AS_L, AS_R, R ), Fr( ~req_id ), Fr( ~nH ) ]
+  --[
+  Send( L,
+        <'L_to_AS', <'2', ~req_id, 'protocol', <AS_L, L>, <AS_R, R>, 'none'>, 
+         epoch, ~nH>
+  ),
+  Secret_I( <'L_to_AS', 
+             <'2', ~req_id, 'protocol', <AS_L, L>, <AS_R, R>, 'none'>, epoch, ~nH>
+  )
+  ]->
+   [
+   St_L_1( L, id, epoch, AS_L, AS_R, R, ~req_id, ~nH ),
+   Out_S( L, AS_L,
+          <'L_to_AS', <'2', ~req_id, 'protocol', <AS_L, L>, <AS_R, R>, 'none'>, 
+           epoch, ~nH>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_AS_L_receive:
+   [
+   St_AS_L_0( AS_L, id, epoch, AS_R, ltk ),
+   In_S( L, AS_L,
+         <'L_to_AS', <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, 
+          nH>
+   ),
+   !AsHostMapping( AS_R, R ), !AsHostMapping( AS_L, L )
+   ]
+  --[
+  Recv( AS_L,
+        <'L_to_AS', <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, 
+         nH>
+  ),
+  Secret_R( <'L_to_AS', 
+             <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, nH>
+  ),
+  Authentic( L,
+             <'L_to_AS', <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, 
+              nH>
+  )
+  ]->
+   [
+   St_AS_L_1( AS_L, id, epoch, AS_R, ltk, L, nH, req_id,
+              drkey_so(drkey(secret_value(ltk, epoch), AS_R), L, R)
+   )
+   ]
+
+  // loop breaker: [1]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_AS_L_send:
+   [ St_AS_L_1( AS_L, id, epoch, AS_R, ltk, L, nH, req_id, key ) ]
+  --[
+  Send( AS_L, <'AS_to_L', req_id, key, exp_time(epoch), nH> ),
+  Secret_I( <'AS_to_L', req_id, key, exp_time(epoch), nH> )
+  ]->
+   [
+   St_AS_L_2( AS_L, id, epoch, AS_R, ltk, L, nH, req_id, key ),
+   Out_S( AS_L, L, <'AS_to_L', req_id, key, exp_time(epoch), nH> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_L_receive:
+   [
+   St_L_1( L, id, epoch, AS_L, AS_R, R, req_id, nH ),
+   In_S( AS_L, L, <'AS_to_L', req_id, key, exp, nH> )
+   ]
+  --[
+  Recv( L, <'AS_to_L', req_id, key, exp, nH> ),
+  Secret_R( <'AS_to_L', req_id, key, exp, nH> ),
+  Eq( exp, exp_time(epoch) ),
+  Authentic( AS_L, <'AS_to_L', req_id, key, exp, nH> ), Secret( L, key ),
+  Honest( L ), Honest( AS_L ), Honest( AS_R ), Honest( R ),
+  FinishHost( L, 'L', <epoch, AS_L, L, AS_R, R, key> )
+  ]->
+   [ St_L_2( L, id, epoch, AS_L, AS_R, R, key ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_R_init:
+   [
+   Fr( ~id ), !AsHostMapping( AS_L, L ), !AsHostMapping( AS_R, R ),
+   !Epoch( epoch )
+   ]
+  --[ Create( R, ~id, 'R' ), NotEq( AS_L, AS_R ) ]->
+   [ St_R_0( R, ~id, epoch, AS_R, AS_L, L ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_R_request:
+   [ St_R_0( R, id, epoch, AS_R, AS_L, L ), Fr( ~req_id ), Fr( ~nH ) ]
+  --[
+  Send( R,
+        <'R_to_AS', <'2', ~req_id, 'protocol', <AS_L, L>, <AS_R, R>, 'none'>, 
+         epoch, ~nH>
+  ),
+  Secret_I( <'R_to_AS', 
+             <'2', ~req_id, 'protocol', <AS_L, L>, <AS_R, R>, 'none'>, epoch, ~nH>
+  )
+  ]->
+   [
+   St_R_1( R, id, epoch, AS_R, AS_L, L, ~req_id, ~nH ),
+   Out_S( R, AS_R,
+          <'R_to_AS', <'2', ~req_id, 'protocol', <AS_L, L>, <AS_R, R>, 'none'>, 
+           epoch, ~nH>
+   )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_AS_R_receive:
+   [
+   St_AS_R_0( AS_R, id, epoch, AS_L, key ),
+   In_S( R, AS_R,
+         <'R_to_AS', <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, 
+          nH>
+   ),
+   !AsHostMapping( AS_L, L ), !AsHostMapping( AS_R, R )
+   ]
+  --[
+  Recv( AS_R,
+        <'R_to_AS', <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, 
+         nH>
+  ),
+  Secret_R( <'R_to_AS', 
+             <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, nH>
+  ),
+  Authentic( R,
+             <'R_to_AS', <key_type, req_id, proto, <AS_L, L>, <AS_R, R>, add>, epoch, 
+              nH>
+  )
+  ]->
+   [
+   St_AS_R_1( AS_R, id, epoch, AS_L, key, R, nH, req_id, drkey_so(key, L, R)
+   )
+   ]
+
+  // loop breaker: [1]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_AS_R_send:
+   [ St_AS_R_1( AS_R, id, epoch, AS_L, key, R, nH, req_id, so_key ) ]
+  --[
+  Send( AS_R, <'AS_to_R', req_id, so_key, exp_time(epoch), nH> ),
+  Secret_I( <'AS_to_R', req_id, so_key, exp_time(epoch), nH> )
+  ]->
+   [
+   St_AS_R_2( AS_R, id, epoch, AS_L, key, R, nH, req_id, so_key ),
+   Out_S( AS_R, R, <'AS_to_R', req_id, so_key, exp_time(epoch), nH> )
+   ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ASHOST_R_receive:
+   [
+   St_R_1( R, id, epoch, AS_R, AS_L, L, req_id, nH ),
+   In_S( AS_R, R, <'AS_to_R', req_id, key, exp, nH> )
+   ]
+  --[
+  Recv( R, <'AS_to_R', req_id, key, exp, nH> ), Eq( exp, exp_time(epoch) ),
+  Secret_R( <'AS_to_R', req_id, key, exp, nH> ),
+  Authentic( AS_R, <'AS_to_R', req_id, key, exp, nH> ), Secret( R, key ),
+  Honest( L ), Honest( AS_L ), Honest( AS_R ), Honest( R ),
+  FinishHost( R, 'R', <epoch, AS_L, L, AS_R, R, key> )
+  ]->
+   [ St_R_2( R, id, epoch, AS_R, AS_L, L, req_id, nH, key ) ]
+
+  /* has exactly the trivial AC variant */
+
+restriction Equality:
+  "∀ x y #i. (Eq( x, y ) @ #i) ⇒ (x = y)"
+  // safety formula
+
+restriction Inequality:
+  "∀ x y #i. (NotEq( x, y ) @ #i) ⇒ (¬(x = y))"
+  // safety formula
+
+restriction ExistsingAS:
+  "∀ A #i.
+    (ASExists( A ) @ #i) ⇒ (∃ #j. (RegisterAS( A ) @ #j) ∧ (#j < #i))"
+
+restriction OnlyOnceV:
+  "∀ #i #j x. ((OnlyOnceV( x ) @ #i) ∧ (OnlyOnceV( x ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+lemma AS_executable_key_agreement:
+  exists-trace
+  "∃ a b ida idb na #i #j #k #l.
+    (((((((Finish( a, b, na ) @ #i) ∧ (Finish( b, a, na ) @ #j)) ∧
+         (¬(a = b))) ∧
+        (Create( a, ida, 'AS_L' ) @ #k)) ∧
+       (Create( b, idb, 'AS_R' ) @ #l)) ∧
+      (¬(∃ X #r. Reveal( X ) @ #r))) ∧
+     (¬(∃ X id #r. (Create( X, id, 'AS_L' ) @ #r) ∧ (¬(id = ida))))) ∧
+    (¬(∃ X id #r. (Create( X, id, 'AS_R' ) @ #r) ∧ (¬(id = idb))))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ a b ida idb na #i #j #k #l.
+  (Finish( a, b, na ) @ #i) ∧
+  (Finish( b, a, na ) @ #j) ∧
+  (Create( a, ida, 'AS_L' ) @ #k) ∧
+  (Create( b, idb, 'AS_R' ) @ #l)
+ ∧
+  (¬(a = b)) ∧
+  (∀ X #r. (Reveal( X ) @ #r) ⇒ ⊥) ∧
+  (∀ X id #r. (Create( X, id, 'AS_L' ) @ #r) ⇒ id = ida) ∧
+  (∀ X id #r. (Create( X, id, 'AS_R' ) @ #r) ⇒ id = idb)"
+*/
+simplify
+solve( Finish( a, b, na ) @ #i )
+  case ASAS_A_send
+  solve( St_A_1( a, id, ltkA, epoch, b, nB ) ▶₀ #i )
+    case ASAS_A_receive
+    solve( !Pk( $AS.1, pkB ) ▶₁ #i )
+      case Register_pk
+      solve( Finish( $AS.1, $AS, drkey(secret_value(~ltkA, ~epoch), $AS.1)
+             ) @ #j )
+        case ASAS_B_receive
+        solve( St_B_1( $AS.1, id.1, ltkB, epoch.1, $AS, nB.1 ) ▶₀ #j )
+          case ASAS_B_send
+          solve( !Pk( $AS, pk(x) ) ▶₁ #j )
+            case Register_pk
+            solve( Create( $AS, ~id, 'AS_L' ) @ #k )
+              case ASAS_A_init
+              solve( Create( $AS.1, ~id.1, 'AS_R' ) @ #l )
+                case ASAS_B_init
+                solve( !KU( sign(<$AS, ~epoch, nB>, ~ltk) ) @ #vk.6 )
+                  case ASAS_B_send
+                  solve( !KU( ~epoch ) @ #vk.5 )
+                    case ASAS_B_send
+                    solve( !KU( ~nB ) @ #vk.6 )
+                      case ASAS_B_send
+                      solve( !KU( sign(<
+                                        aenc(<drkey(secret_value(~ltkA, ~epoch), $AS.1), $AS>, pk(~ltk)), 
+                                        exp_time(~epoch), ~nB>,
+                                       ~ltkA)
+                             ) @ #vk.12 )
+                        case ASAS_A_send
+                        solve( !KU( aenc(<drkey(secret_value(~ltkA, ~epoch), $AS.1), $AS>,
+                                         pk(~ltk))
+                               ) @ #vk.11 )
+                          case ASAS_A_send
+                          solve( !KU( exp_time(~epoch) ) @ #vk.12 )
+                            case ASAS_A_send
+                            SOLVED // trace found
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma HOST_executable_local_key_fetch:
+  exists-trace
+  "∃ l r al ar idl idal idar key epoch #i #cl #cal #car #tal.
+    ((((((((FinishHost( l, 'L', <epoch, al, l, ar, r, key> ) @ #i) ∧
+           (Create( l, idl, 'L' ) @ #cl)) ∧
+          (Create( al, idal, 'AS_L' ) @ #cal)) ∧
+         (Create( ar, idar, 'AS_R' ) @ #car)) ∧
+        (Transform( al, idal, 'local' ) @ #tal)) ∧
+       (¬(∃ X idx #r.1. (Create( X, idx, 'L' ) @ #r.1) ∧ (¬(idx = idl))))) ∧
+      (¬(∃ X idx #r.1. (Create( X, idx, 'AS_L' ) @ #r.1) ∧ (¬(idx = idal))))) ∧
+     (¬(∃ X idx #r.1. (Create( X, idx, 'AS_R' ) @ #r.1) ∧ (¬(idx = idar))))) ∧
+    (¬(∃ X #r.1. Reveal( X ) @ #r.1))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ l r al ar idl idal idar key epoch #i #cl #cal #car #tal.
+  (FinishHost( l, 'L', <epoch, al, l, ar, r, key> ) @ #i) ∧
+  (Create( l, idl, 'L' ) @ #cl) ∧
+  (Create( al, idal, 'AS_L' ) @ #cal) ∧
+  (Create( ar, idar, 'AS_R' ) @ #car) ∧
+  (Transform( al, idal, 'local' ) @ #tal)
+ ∧
+  (∀ X idx #r.1. (Create( X, idx, 'L' ) @ #r.1) ⇒ idx = idl) ∧
+  (∀ X idx #r.1. (Create( X, idx, 'AS_L' ) @ #r.1) ⇒ idx = idal) ∧
+  (∀ X idx #r.1. (Create( X, idx, 'AS_R' ) @ #r.1) ⇒ idx = idar) ∧
+  (∀ X #r.1. (Reveal( X ) @ #r.1) ⇒ ⊥)"
+*/
+simplify
+solve( FinishHost( l, 'L', <epoch, al, l, ar, r, key> ) @ #i )
+  case ASHOST_L_receive
+  solve( St_L_1( l, id, epoch, al, ar, r, req_id, nH ) ▶₀ #i )
+    case ASHOST_L_request
+    solve( In_S( $A, $E, <'AS_to_L', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      solve( Create( $E, ~id, 'L' ) @ #cl )
+        case ASHOST_L_init
+        solve( Create( $A, ~id.1, 'AS_L' ) @ #cal )
+          case ASAS_A_init
+          solve( Create( $A.1, idar, 'AS_R' ) @ #car )
+            case ASAS_B_init
+            solve( !Ltk( $A.1, ~ltkB ) ▶₁ #car )
+              case Register_pk
+              solve( !Epoch( epoch.1 ) ▶₂ #car )
+                case Register_epoch
+                solve( Transform( $A, ~id, 'local' ) @ #tal )
+                  case ASAS_to_ASHOST_LOCAL
+                  solve( St_A_2( $A, ~id, ltkA, epoch.2, B, nB ) ▶₀ #tal )
+                    case ASAS_A_send
+                    solve( !KU( sign(<$A, ~epoch, nB>, ~ltk.1) ) @ #vk.6 )
+                      case ASAS_B_send
+                      solve( In_S( $E, $A,
+                                   <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.1, $E.2>, add>, 
+                                    ~epoch, ~nH>
+                             ) ▶₁ #vr.9 )
+                        case ChanIn_S
+                        solve( !KU( ~epoch ) @ #vk.5 )
+                          case ASAS_B_send
+                          solve( !KU( ~nB ) @ #vk.6 )
+                            case ASAS_B_send
+                            SOLVED // trace found
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma HOST_executable_remote_key_fetch:
+  exists-trace
+  "∃ l r al ar idr idal idar key epoch #i #cr #cal #car #tar.
+    ((((((((FinishHost( r, 'R', <epoch, al, l, ar, r, key> ) @ #i) ∧
+           (Create( r, idr, 'R' ) @ #cr)) ∧
+          (Create( al, idal, 'AS_L' ) @ #cal)) ∧
+         (Create( ar, idar, 'AS_R' ) @ #car)) ∧
+        (Transform( ar, idar, 'remote' ) @ #tar)) ∧
+       (¬(∃ X idx #r.1. (Create( X, idx, 'R' ) @ #r.1) ∧ (¬(idx = idr))))) ∧
+      (¬(∃ X idx #r.1. (Create( X, idx, 'AS_L' ) @ #r.1) ∧ (¬(idx = idal))))) ∧
+     (¬(∃ X idx #r.1. (Create( X, idx, 'AS_R' ) @ #r.1) ∧ (¬(idx = idar))))) ∧
+    (¬(∃ X #r.1. Reveal( X ) @ #r.1))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ l r al ar idr idal idar key epoch #i #cr #cal #car #tar.
+  (FinishHost( r, 'R', <epoch, al, l, ar, r, key> ) @ #i) ∧
+  (Create( r, idr, 'R' ) @ #cr) ∧
+  (Create( al, idal, 'AS_L' ) @ #cal) ∧
+  (Create( ar, idar, 'AS_R' ) @ #car) ∧
+  (Transform( ar, idar, 'remote' ) @ #tar)
+ ∧
+  (∀ X idx #r.1. (Create( X, idx, 'R' ) @ #r.1) ⇒ idx = idr) ∧
+  (∀ X idx #r.1. (Create( X, idx, 'AS_L' ) @ #r.1) ⇒ idx = idal) ∧
+  (∀ X idx #r.1. (Create( X, idx, 'AS_R' ) @ #r.1) ⇒ idx = idar) ∧
+  (∀ X #r.1. (Reveal( X ) @ #r.1) ⇒ ⊥)"
+*/
+simplify
+solve( FinishHost( r, 'R', <epoch, al, l, ar, r, key> ) @ #i )
+  case ASHOST_R_receive
+  solve( St_R_1( r, id, epoch, ar, al, l, req_id, nH ) ▶₀ #i )
+    case ASHOST_R_request
+    solve( In_S( $A, $E, <'AS_to_R', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      solve( Create( $E, ~id, 'R' ) @ #cr )
+        case ASHOST_R_init
+        solve( Create( $A, idal, 'AS_L' ) @ #cal )
+          case ASAS_A_init
+          solve( !Ltk( $A, ~ltkA ) ▶₁ #cal )
+            case Register_pk
+            solve( !Epoch( epoch ) ▶₂ #cal )
+              case Register_epoch
+              solve( Create( $A.1, ~id.2, 'AS_R' ) @ #car )
+                case ASAS_B_init
+                solve( Transform( $A.1, ~id.1, 'remote' ) @ #tar )
+                  case ASAS_to_ASHOST_REMOTE
+                  solve( St_B_2( $A.1, ~id.1, ltkB, epoch.2, A.2, nB, key.1 ) ▶₀ #tar )
+                    case ASAS_B_receive
+                    solve( !KU( sign(<aenc(<key, $A.2>, pk(~ltk.1)), exp_time(~epoch.1), ~nB
+                                     >,
+                                     ~ltk.2)
+                           ) @ #vk.6 )
+                      case ASAS_A_send
+                      solve( In_S( $E.1, $A.1,
+                                   <'R_to_AS', <key_type, ~req_id, proto, <$A, $E.2>, <$A.1, $E.1>, add>, 
+                                    ~epoch, ~nH>
+                             ) ▶₁ #vr.9 )
+                        case ChanIn_S
+                        solve( !KU( ~nB ) @ #vk.6 )
+                          case ASAS_B_send
+                          solve( !KU( ~epoch ) @ #vk.11 )
+                            case ASAS_B_send
+                            solve( !KU( sign(<$A, ~epoch, ~nB>, ~ltk.1) ) @ #vk.12 )
+                              case ASAS_B_send
+                              solve( !KU( aenc(<drkey(secret_value(~ltk, ~epoch), $A.1), $A>,
+                                               pk(~ltk.1))
+                                     ) @ #vk.10 )
+                                case ASAS_A_send
+                                solve( !KU( exp_time(~epoch) ) @ #vk.11 )
+                                  case ASAS_A_send
+                                  SOLVED // trace found
+                                qed
+                              qed
+                            qed
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma HOST_executable_hosts_agree:
+  exists-trace
+  "∃ l r al ar idl idr key epoch #i #j #cl #cr.
+    (((((((FinishHost( l, 'L', <epoch, al, l, ar, r, key> ) @ #i) ∧
+          (FinishHost( r, 'R', <epoch, al, l, ar, r, key> ) @ #j)) ∧
+         (Create( l, idl, 'L' ) @ #cl)) ∧
+        (Create( r, idr, 'R' ) @ #cr)) ∧
+       (¬(∃ x idx #r.1. (Create( x, idx, 'L' ) @ #r.1) ∧ (¬(idx = idl))))) ∧
+      (¬(∃ x idx #r.1. (Create( x, idx, 'R' ) @ #r.1) ∧ (¬(idx = idr))))) ∧
+     (¬(l = r))) ∧
+    (¬(∃ X #r.1. Reveal( X ) @ #r.1))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ l r al ar idl idr key epoch #i #j #cl #cr.
+  (FinishHost( l, 'L', <epoch, al, l, ar, r, key> ) @ #i) ∧
+  (FinishHost( r, 'R', <epoch, al, l, ar, r, key> ) @ #j) ∧
+  (Create( l, idl, 'L' ) @ #cl) ∧
+  (Create( r, idr, 'R' ) @ #cr)
+ ∧
+  (∀ x idx #r.1. (Create( x, idx, 'L' ) @ #r.1) ⇒ idx = idl) ∧
+  (∀ x idx #r.1. (Create( x, idx, 'R' ) @ #r.1) ⇒ idx = idr) ∧
+  (¬(l = r)) ∧
+  (∀ X #r.1. (Reveal( X ) @ #r.1) ⇒ ⊥)"
+*/
+simplify
+solve( FinishHost( l, 'L', <epoch, al, l, ar, r, key> ) @ #i )
+  case ASHOST_L_receive
+  solve( St_L_1( l, id, epoch, al, ar, r, req_id, nH ) ▶₀ #i )
+    case ASHOST_L_request
+    solve( In_S( $A, $E, <'AS_to_L', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      solve( FinishHost( $E.1, 'R',
+                         <~epoch, $A, $E, $A.1, $E.1, 
+                          drkey_so(drkey(secret_value(~ltk, ~epoch), $A.2), $E, $E.2)>
+             ) @ #j )
+        case ASHOST_R_receive
+        solve( St_R_1( $E.1, id.1, ~epoch, $A.1, $A, $E, req_id.1, nH.1 ) ▶₀ #j )
+          case ASHOST_R_request
+          solve( In_S( $A.1, $E.1,
+                       <'AS_to_R', ~req_id.1, 
+                        drkey_so(drkey(secret_value(~ltk, ~epoch), $A.2), $E, $E.2), 
+                        exp_time(~epoch), ~nH.1>
+                 ) ▶₁ #j )
+            case ChanIn_S
+            solve( Create( $E, ~id, 'L' ) @ #cl )
+              case ASHOST_L_init
+              solve( Create( $E.1, ~id.1, 'R' ) @ #cr )
+                case ASHOST_R_init
+                solve( !KU( sign(<$A, ~epoch, nB>, ~ltk.1) ) @ #vk.6 )
+                  case ASAS_B_send
+                  solve( !KU( sign(<
+                                    aenc(<drkey(secret_value(~ltk, ~epoch), $A.1), $A>, pk(~ltk.1)), 
+                                    exp_time(~epoch), ~nB.1>,
+                                   ~ltk)
+                         ) @ #vk.13 )
+                    case ASAS_A_send
+                    solve( In_S( $E, $A,
+                                 <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                                  ~epoch, ~nH>
+                           ) ▶₁ #vr.9 )
+                      case ChanIn_S
+                      solve( In_S( $E.1, $A.1,
+                                   <'R_to_AS', <key_type, ~req_id.1, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                                    ~epoch, ~nH.1>
+                             ) ▶₁ #vr.18 )
+                        case ChanIn_S
+                        solve( !KU( ~epoch ) @ #vk.9 )
+                          case ASAS_B_send
+                          solve( !KU( ~nB.1 ) @ #vk.16 )
+                            case ASAS_B_send
+                            solve( !KU( ~nB ) @ #vk.12 )
+                              case ASAS_B_send
+                              solve( !KU( sign(<$A, ~epoch, ~nB.1>, ~ltk.1) ) @ #vk.17 )
+                                case ASAS_B_send
+                                solve( !KU( aenc(<drkey(secret_value(~ltk, ~epoch), $A.1), $A>,
+                                                 pk(~ltk.1))
+                                       ) @ #vk.16 )
+                                  case ASAS_A_send
+                                  solve( !KU( sign(<$A, ~epoch, nB.3>, ~ltk.1) ) @ #vk.22 )
+                                    case ASAS_B_send
+                                    solve( !KU( ~nB.3 ) @ #vk.22 )
+                                      case ASAS_B_send
+                                      solve( !KU( exp_time(~epoch) ) @ #vk.22 )
+                                        case ASAS_A_send
+                                        solve( !KU( sign(<$AS.3, ~epoch, nB.4>, ~ltk.3) ) @ #vk.28 )
+                                          case ASAS_B_send
+                                          solve( !KU( ~nB.4 ) @ #vk.28 )
+                                            case ASAS_B_send
+                                            SOLVED // trace found
+                                          qed
+                                        qed
+                                      qed
+                                    qed
+                                  qed
+                                qed
+                              qed
+                            qed
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma HOST_hosts_agree:
+  all-traces
+  "∀ l r al ar key_l key_r epoch #i #j.
+    (((FinishHost( l, 'L', <epoch, al, l, ar, r, key_l> ) @ #i) ∧
+      (FinishHost( r, 'R', <epoch, al, l, ar, r, key_r> ) @ #j)) ∧
+     (¬(l = r))) ⇒
+    ((key_l = key_r) ∨
+     (∃ X #r.1.
+       (Reveal( X ) @ #r.1) ∧ ((Honest( X ) @ #i) ∨ (Honest( X ) @ #j))))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ l r al ar key_l key_r epoch #i #j.
+  (FinishHost( l, 'L', <epoch, al, l, ar, r, key_l> ) @ #i) ∧
+  (FinishHost( r, 'R', <epoch, al, l, ar, r, key_r> ) @ #j)
+ ∧
+  (¬(l = r)) ∧
+  (¬(key_l = key_r)) ∧
+  (∀ X #r.1.
+    (Reveal( X ) @ #r.1) ⇒ (¬(Honest( X ) @ #i)) ∧ (¬(Honest( X ) @ #j)))"
+*/
+simplify
+solve( FinishHost( l, 'L', <epoch, al, l, ar, r, key_l> ) @ #i )
+  case ASHOST_L_receive
+  solve( St_L_1( l, id, epoch, al, ar, r, req_id, nH ) ▶₀ #i )
+    case ASHOST_L_request
+    solve( In_S( $A, $E, <'AS_to_L', ~req_id, key_l, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      solve( FinishHost( $E.1, 'R', <~epoch, $A, $E, $A.1, $E.1, key_r>
+             ) @ #j )
+        case ASHOST_R_receive
+        solve( St_R_1( $E.1, id.1, ~epoch, $A.1, $A, $E, req_id.1, nH.1 ) ▶₀ #j )
+          case ASHOST_R_request
+          solve( In_S( $A.1, $E.1,
+                       <'AS_to_R', ~req_id.1, key_r, exp_time(~epoch), ~nH.1>
+                 ) ▶₁ #j )
+            case ChanIn_S
+            solve( !KU( sign(<$A, ~epoch, nB>, ~ltk.2) ) @ #vk.6 )
+              case ASAS_B_send
+              solve( !KU( sign(<aenc(<key, $A.3>, pk(~ltk.1)), exp_time(~epoch), ~nB.1
+                               >,
+                               ~ltk.3)
+                     ) @ #vk.13 )
+                case ASAS_A_send
+                solve( In_S( $E, $A,
+                             <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  solve( In_S( $E.1, $A.1,
+                               <'R_to_AS', 
+                                <key_type, ~req_id.1, proto, <$A.2, $E.2>, <$A.1, $E.1>, add>, ~epoch, 
+                                ~nH.1>
+                         ) ▶₁ #vr.20 )
+                    case ChanIn_S
+                    by contradiction /* from formulas */
+                  qed
+                qed
+              next
+                case c_sign
+                solve( !KU( ~ltk.3 ) @ #vk.14 )
+                  case Reveal_ltk
+                  solve( !KU( aenc(<key, $A.3>, pk(~ltk.2)) ) @ #vk.11 )
+                    case ASAS_A_send
+                    solve( !KU( sign(<$A.3, ~epoch.1, nB.2>, ~ltk.3) ) @ #vk.21 )
+                      case ASAS_B_send
+                      solve( In_S( $E, $A,
+                                   <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                                    ~epoch, ~nH>
+                             ) ▶₁ #vr.10 )
+                        case ChanIn_S
+                        solve( In_S( $E.1, $A.1,
+                                     <'R_to_AS', 
+                                      <key_type, ~req_id.1, proto, <$A.2, $E.2>, <$A.1, $E.1>, add>, ~epoch, 
+                                      ~nH.1>
+                               ) ▶₁ #vr.20 )
+                          case ChanIn_S
+                          by contradiction /* from formulas */
+                        qed
+                      qed
+                    next
+                      case c_sign
+                      solve( !KU( ~ltk.3 ) @ #vk.22 )
+                        case Reveal_ltk
+                        by contradiction /* from formulas */
+                      qed
+                    qed
+                  next
+                    case c_aenc
+                    solve( In_S( $E, $A,
+                                 <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                                  ~epoch, ~nH>
+                           ) ▶₁ #vr.10 )
+                      case ChanIn_S
+                      solve( In_S( $E.1, $A.1,
+                                   <'R_to_AS', 
+                                    <key_type, ~req_id.1, proto, <$A.2, $E.2>, <$A.1, $E.1>, add>, ~epoch, 
+                                    ~nH.1>
+                             ) ▶₁ #vr.20 )
+                        case ChanIn_S
+                        by contradiction /* from formulas */
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            next
+              case c_sign
+              solve( !KU( ~ltk.2 ) @ #vk.14 )
+                case Reveal_ltk
+                solve( !KU( sign(<aenc(<key, $A.3>, pk(~ltk.2)), exp_time(~epoch), ~nB.1
+                                 >,
+                                 ~ltk.3)
+                       ) @ #vk.14 )
+                  case ASAS_A_send
+                  solve( In_S( $E, $A,
+                               <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                                ~epoch, ~nH>
+                         ) ▶₁ #vr.10 )
+                    case ChanIn_S
+                    by contradiction /* from formulas */
+                  qed
+                next
+                  case c_sign
+                  solve( !KU( ~ltk.3 ) @ #vk.15 )
+                    case Reveal_ltk
+                    solve( !KU( aenc(<key, $A.3>, pk(~ltk.2)) ) @ #vk.12 )
+                      case ASAS_A_send
+                      solve( !KU( sign(<$A.3, ~epoch.1, nB.2>, ~ltk.3) ) @ #vk.22 )
+                        case ASAS_B_send
+                        solve( In_S( $E, $A,
+                                     <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                                      ~epoch, ~nH>
+                               ) ▶₁ #vr.10 )
+                          case ChanIn_S
+                          by contradiction /* from formulas */
+                        qed
+                      next
+                        case c_sign
+                        solve( !KU( ~ltk.3 ) @ #vk.23 )
+                          case Reveal_ltk
+                          by contradiction /* from formulas */
+                        qed
+                      qed
+                    next
+                      case c_aenc
+                      solve( In_S( $E, $A,
+                                   <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                                    ~epoch, ~nH>
+                             ) ▶₁ #vr.10 )
+                        case ChanIn_S
+                        by contradiction /* from formulas */
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma secrecy:
+  all-traces
+  "∀ A x #i.
+    (Secret( A, x ) @ #i) ⇒
+    ((¬(∃ #j. K( x ) @ #j)) ∨
+     (∃ X #r. (Reveal( X ) @ #r) ∧ (Honest( X ) @ #i)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ A x #i.
+  (Secret( A, x ) @ #i)
+ ∧
+  (∃ #j. (K( x ) @ #j)) ∧
+  (∀ X #r. (Reveal( X ) @ #r) ∧ (Honest( X ) @ #i) ⇒ ⊥)"
+*/
+simplify
+solve( Secret( A, x ) @ #i )
+  case ASAS_B_receive
+  solve( St_B_1( A, id, ltkB, epoch, A.1, nB ) ▶₀ #i )
+    case ASAS_B_send
+    solve( !Pk( $AS.1, pk(x) ) ▶₁ #i )
+      case Register_pk
+      solve( !KU( sign(<aenc(<x, $AS.1>, pk(~ltkB)), exp_time(~epoch), ~nB>,
+                       ~ltk)
+             ) @ #vk.7 )
+        case ASAS_A_send
+        solve( !KU( drkey(secret_value(~ltk, ~epoch), $AS) ) @ #vk.1 )
+          case ASAS_A_send
+          solve( !KU( ~ltkB ) @ #vk.16 )
+            case Reveal_ltk
+            by contradiction /* from formulas */
+          qed
+        next
+          case c_drkey
+          solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.14 )
+            case c_secret_value
+            solve( !KU( ~ltk ) @ #vk.16 )
+              case Reveal_ltk
+              by contradiction /* from formulas */
+            qed
+          qed
+        qed
+      next
+        case c_sign
+        solve( !KU( ~ltk ) @ #vk.8 )
+          case Reveal_ltk
+          by contradiction /* from formulas */
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_L_receive
+  solve( St_L_1( A, id, epoch, AS_L, AS_R, R, req_id, nH ) ▶₀ #i )
+    case ASHOST_L_request
+    solve( In_S( $A, $E, <'AS_to_L', ~req_id, x, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch), $A.2), $E, $E.2)
+             ) @ #vk )
+        case c_drkey_so
+        solve( !KU( sign(<$A, ~epoch, nB>, ~ltk.2) ) @ #vk.7 )
+          case ASAS_B_send
+          solve( !KU( drkey(secret_value(~ltk, ~epoch), $A.2) ) @ #vk.8 )
+            case ASAS_A_send
+            solve( !KU( ~ltk.1 ) @ #vk.13 )
+              case Reveal_ltk
+              solve( !KU( sign(<$A, ~epoch, nB.1>, ~ltk.1) ) @ #vk.16 )
+                case ASAS_B_send
+                solve( In_S( $E, $A,
+                             <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              next
+                case c_sign
+                solve( In_S( $E, $A,
+                             <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              qed
+            qed
+          next
+            case c_drkey
+            solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.11 )
+              case c_secret_value
+              solve( !KU( ~ltk ) @ #vk.13 )
+                case Reveal_ltk
+                by contradiction /* from formulas */
+              qed
+            qed
+          qed
+        next
+          case c_sign
+          solve( !KU( ~ltk.2 ) @ #vk.11 )
+            case Reveal_ltk
+            solve( !KU( drkey(secret_value(~ltk, ~epoch), $A.2) ) @ #vk.9 )
+              case ASAS_A_send
+              solve( !KU( sign(<$A, ~epoch, nB.1>, ~ltk.1) ) @ #vk.16 )
+                case ASAS_B_send
+                solve( In_S( $E, $A,
+                             <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              next
+                case c_sign
+                solve( In_S( $E, $A,
+                             <'L_to_AS', <key_type, ~req_id, proto, <$A, $E>, <$A.2, $E.2>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              qed
+            next
+              case c_drkey
+              solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.12 )
+                case c_secret_value
+                solve( !KU( ~ltk ) @ #vk.14 )
+                  case Reveal_ltk
+                  by contradiction /* from formulas */
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_R_receive
+  solve( St_R_1( A, id, epoch, AS_R, AS_L, L, req_id, nH ) ▶₀ #i )
+    case ASHOST_R_request
+    solve( In_S( $A, $E, <'AS_to_R', ~req_id, x, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      solve( !KU( sign(<aenc(<key, $A.2>, pk(~ltk.1)), exp_time(~epoch), ~nB>,
+                       ~ltk.2)
+             ) @ #vk.7 )
+        case ASAS_A_send
+        solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch), $A), $E.2, $E)
+               ) @ #vk.1 )
+          case c_drkey_so
+          solve( !KU( drkey(secret_value(~ltk, ~epoch), $A) ) @ #vk.14 )
+            case ASAS_A_send
+            solve( !KU( ~ltk.1 ) @ #vk.19 )
+              case Reveal_ltk
+              by contradiction /* from formulas */
+            qed
+          next
+            case c_drkey
+            solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.17 )
+              case c_secret_value
+              solve( !KU( ~ltk ) @ #vk.19 )
+                case Reveal_ltk
+                solve( In_S( $E, $A,
+                             <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              qed
+            qed
+          qed
+        qed
+      next
+        case c_sign
+        solve( !KU( ~ltk.2 ) @ #vk.8 )
+          case Reveal_ltk
+          solve( !KU( aenc(<key, $A.2>, pk(~ltk)) ) @ #vk.5 )
+            case ASAS_A_send
+            solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch.1), $A), $E.2, $E)
+                   ) @ #vk.4 )
+              case c_drkey_so
+              solve( !KU( sign(<$A.2, ~epoch.1, nB.1>, ~ltk.1) ) @ #vk.15 )
+                case ASAS_B_send
+                solve( !KU( exp_time(~epoch) ) @ #vk.8 )
+                  case ASAS_A_send
+                  solve( !KU( sign(<$AS.1, ~epoch, nB.2>, ~ltk.3) ) @ #vk.25 )
+                    case ASAS_B_send
+                    solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.17 )
+                      case ASAS_A_send
+                      solve( !KU( ~ltk.1 ) @ #vk.26 )
+                        case Reveal_ltk
+                        by contradiction /* from formulas */
+                      qed
+                    next
+                      case c_drkey
+                      solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.26 )
+                        case c_secret_value
+                        solve( In_S( $E, $A,
+                                     <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                                      ~epoch, ~nH>
+                               ) ▶₁ #vr.10 )
+                          case ChanIn_S
+                          by contradiction /* from formulas */
+                        qed
+                      qed
+                    qed
+                  next
+                    case c_sign
+                    solve( !KU( ~ltk.3 ) @ #vk.26 )
+                      case Reveal_ltk
+                      solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.19 )
+                        case ASAS_A_send
+                        solve( !KU( ~ltk.1 ) @ #vk.27 )
+                          case Reveal_ltk
+                          by contradiction /* from formulas */
+                        qed
+                      next
+                        case c_drkey
+                        solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.27 )
+                          case c_secret_value
+                          solve( In_S( $E, $A,
+                                       <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                                        ~epoch, ~nH>
+                                 ) ▶₁ #vr.10 )
+                            case ChanIn_S
+                            by contradiction /* from formulas */
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                next
+                  case c_exp_time
+                  solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.16 )
+                    case ASAS_A_send
+                    solve( !KU( ~ltk.1 ) @ #vk.20 )
+                      case Reveal_ltk
+                      by contradiction /* from formulas */
+                    qed
+                  next
+                    case c_drkey
+                    solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.20 )
+                      case c_secret_value
+                      solve( In_S( $E, $A,
+                                   <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                                    ~epoch, ~nH>
+                             ) ▶₁ #vr.10 )
+                        case ChanIn_S
+                        by contradiction /* from formulas */
+                      qed
+                    qed
+                  qed
+                qed
+              next
+                case c_sign
+                solve( !KU( ~ltk.1 ) @ #vk.19 )
+                  case Reveal_ltk
+                  by contradiction /* from formulas */
+                qed
+              qed
+            qed
+          next
+            case c_aenc
+            solve( !KU( exp_time(~epoch) ) @ #vk.7 )
+              case ASAS_A_send
+              solve( !KU( sign(<$AS.1, ~epoch, nB.1>, ~ltk.3) ) @ #vk.19 )
+                case ASAS_B_send
+                solve( In_S( $E, $A,
+                             <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                              ~epoch, ~nH>
+                       ) ▶₁ #vr.10 )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              next
+                case c_sign
+                solve( !KU( ~ltk.2 ) @ #vk.20 )
+                  case Reveal_ltk
+                  solve( In_S( $E, $A,
+                               <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                                ~epoch, ~nH>
+                         ) ▶₁ #vr.10 )
+                    case ChanIn_S
+                    by contradiction /* from formulas */
+                  qed
+                qed
+              qed
+            next
+              case c_exp_time
+              solve( In_S( $E, $A,
+                           <'R_to_AS', <key_type, ~req_id, proto, <$A.2, $E.2>, <$A, $E>, add>, 
+                            ~epoch, ~nH>
+                     ) ▶₁ #vr.10 )
+                case ChanIn_S
+                by contradiction /* from formulas */
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+qed
+
+lemma noninjectiveagreementINITIATOR:
+  all-traces
+  "∀ a b t #i.
+    (Commit( a, b, <'AS_L', 'AS_R', t> ) @ #i) ⇒
+    ((∃ #j. Running( b, a, <'AS_L', 'AS_R', t> ) @ #j) ∨
+     (∃ X #r. (Reveal( X ) @ #r) ∧ (Honest( X ) @ #i)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a b t #i.
+  (Commit( a, b, <'AS_L', 'AS_R', t> ) @ #i)
+ ∧
+  (∀ #j. (Running( b, a, <'AS_L', 'AS_R', t> ) @ #j) ⇒ ⊥) ∧
+  (∀ X #r. (Reveal( X ) @ #r) ∧ (Honest( X ) @ #i) ⇒ ⊥)"
+*/
+simplify
+solve( St_B_1( a, id, ltkB, epoch, b, nB ) ▶₀ #i )
+  case ASAS_B_send
+  solve( !Pk( $AS.1, pk(x) ) ▶₁ #i )
+    case Register_pk
+    solve( !KU( sign(<aenc(<key, $AS.1>, pk(~ltkB)), exp_time(~epoch), ~nB>,
+                     ~ltk)
+           ) @ #vk.6 )
+      case ASAS_A_send
+      by contradiction /* from formulas */
+    next
+      case c_sign
+      solve( !KU( ~ltk ) @ #vk.7 )
+        case Reveal_ltk
+        by contradiction /* from formulas */
+      qed
+    qed
+  qed
+qed
+
+lemma injectiveagreementINITIATOR:
+  all-traces
+  "∀ a b t #i.
+    (Commit( a, b, <'AS_L', 'AS_R', t> ) @ #i) ⇒
+    ((∃ #j.
+       ((Running( b, a, <'AS_L', 'AS_R', t> ) @ #j) ∧ (#j < #i)) ∧
+       (¬(∃ a2 b2 #i2.
+           (Commit( a2, b2, <'AS_L', 'AS_R', t> ) @ #i2) ∧ (¬(#i2 = #i))))) ∨
+     (∃ X #r. (Reveal( X ) @ #r) ∧ (Honest( X ) @ #i)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a b t #i.
+  (Commit( a, b, <'AS_L', 'AS_R', t> ) @ #i)
+ ∧
+  (∀ #j.
+    (Running( b, a, <'AS_L', 'AS_R', t> ) @ #j)
+   ⇒
+    ((¬(#j < #i)) ∨
+     (∃ a2 b2 #i2.
+       (Commit( a2, b2, <'AS_L', 'AS_R', t> ) @ #i2) ∧ ¬(#i2 = #i)))) ∧
+  (∀ X #r. (Reveal( X ) @ #r) ∧ (Honest( X ) @ #i) ⇒ ⊥)"
+*/
+simplify
+solve( St_B_1( a, id, ltkB, epoch, b, nB ) ▶₀ #i )
+  case ASAS_B_send
+  solve( !Pk( $AS.1, pk(x) ) ▶₁ #i )
+    case Register_pk
+    solve( !KU( sign(<aenc(<key, $AS.1>, pk(~ltkB)), exp_time(~epoch), ~nB>,
+                     ~ltk)
+           ) @ #vk.6 )
+      case ASAS_A_send
+      solve( (#i2 < #i)  ∥ (#i < #i2) )
+        case case_1
+        solve( St_B_1( a2, id.1, ltkB.1, epoch.1, b2, ~nB ) ▶₀ #i2 )
+          case ASAS_B_send
+          by contradiction /* cyclic */
+        qed
+      next
+        case case_2
+        solve( St_B_1( a2, id.1, ltkB.1, epoch.1, b2, ~nB ) ▶₀ #i2 )
+          case ASAS_B_send
+          by contradiction /* cyclic */
+        qed
+      qed
+    next
+      case c_sign
+      solve( !KU( ~ltk ) @ #vk.7 )
+        case Reveal_ltk
+        by contradiction /* from formulas */
+      qed
+    qed
+  qed
+qed
+
+lemma CHAN_secret_initiator:
+  all-traces "∀ n #i #j. ((Secret_I( n ) @ #i) ∧ (K( n ) @ #j)) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ n #i #j. (Secret_I( n ) @ #i) ∧ (K( n ) @ #j)"
+*/
+simplify
+solve( Secret_I( n ) @ #i )
+  case ASHOST_AS_L_send
+  solve( St_AS_L_1( AS_L, id, epoch, AS_R, ltk, L, nH, req_id, key
+         ) ▶₀ #i )
+    case ASHOST_AS_L_receive
+    solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch), $A.1), $E, $E.1)
+           ) @ #vk.5 )
+      case c_drkey_so
+      solve( !KU( sign(<$A, ~epoch, nB>, ~ltk.1) ) @ #vk.15 )
+        case ASAS_B_send
+        solve( !KU( drkey(secret_value(~ltk, ~epoch), $A.1) ) @ #vk.16 )
+          case ASAS_A_send
+          solve( !KU( ~ltk.1 ) @ #vk.21 )
+            case Reveal_ltk
+            solve( !KU( sign(<$A, ~epoch, nB.1>, ~ltk.1) ) @ #vk.24 )
+              case ASAS_B_send
+              solve( In_S( $E, $A,
+                           <'L_to_AS', <key_type, req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.11 )
+              qed
+            next
+              case c_sign
+              solve( In_S( $E, $A,
+                           <'L_to_AS', <key_type, req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.11 )
+              qed
+            qed
+          qed
+        next
+          case c_drkey
+          solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.19 )
+            case c_secret_value
+            solve( !KU( ~ltk ) @ #vk.21 )
+              case Reveal_ltk
+              solve( In_S( $E, $A,
+                           <'L_to_AS', <key_type, req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.10 )
+              qed
+            qed
+          qed
+        qed
+      next
+        case c_sign
+        solve( !KU( ~ltk.1 ) @ #vk.19 )
+          case Reveal_ltk
+          solve( !KU( drkey(secret_value(~ltk, ~epoch), $A.1) ) @ #vk.17 )
+            case ASAS_A_send
+            solve( !KU( sign(<$A, ~epoch, nB.1>, ~ltk.1) ) @ #vk.24 )
+              case ASAS_B_send
+              solve( In_S( $E, $A,
+                           <'L_to_AS', <key_type, req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.11 )
+              qed
+            next
+              case c_sign
+              solve( In_S( $E, $A,
+                           <'L_to_AS', <key_type, req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.11 )
+              qed
+            qed
+          next
+            case c_drkey
+            solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.20 )
+              case c_secret_value
+              solve( !KU( ~ltk ) @ #vk.22 )
+                case Reveal_ltk
+                solve( In_S( $E, $A,
+                             <'L_to_AS', <key_type, req_id, proto, <$A, $E>, <$A.1, $E.1>, add>, 
+                              ~epoch, nH>
+                       ) ▶₁ #vr )
+                  case ChanIn_S
+                  by solve( !KU( ~req_id ) @ #vk.11 )
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_AS_R_send
+  solve( St_AS_R_1( AS_R, id, epoch, AS_L, key, R, nH, req_id, so_key
+         ) ▶₀ #i )
+    case ASHOST_AS_R_receive
+    solve( !KU( sign(<aenc(<key, $A.1>, pk(~ltk)), exp_time(~epoch), ~nB>,
+                     ~ltk.1)
+           ) @ #vk.14 )
+      case ASAS_A_send
+      solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch), $A), $E.1, $E)
+             ) @ #vk.6 )
+        case c_drkey_so
+        solve( !KU( drkey(secret_value(~ltk, ~epoch), $A) ) @ #vk.21 )
+          case ASAS_A_send
+          solve( !KU( ~ltk.1 ) @ #vk.26 )
+            case Reveal_ltk
+            solve( !KU( sign(<$A.1, ~epoch, nB.1>, ~ltk.1) ) @ #vk.29 )
+              case ASAS_B_send
+              solve( In_S( $E, $A,
+                           <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.11 )
+              qed
+            next
+              case c_sign
+              solve( In_S( $E, $A,
+                           <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.11 )
+              qed
+            qed
+          qed
+        next
+          case c_drkey
+          solve( !KU( secret_value(~ltk, ~epoch) ) @ #vk.24 )
+            case c_secret_value
+            solve( !KU( ~ltk ) @ #vk.26 )
+              case Reveal_ltk
+              solve( In_S( $E, $A,
+                           <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.10 )
+              qed
+            qed
+          qed
+        qed
+      qed
+    next
+      case c_sign
+      solve( !KU( ~ltk.1 ) @ #vk.15 )
+        case Reveal_ltk
+        solve( !KU( exp_time(~epoch) ) @ #vk.10 )
+          case ASAS_A_send
+          solve( !KU( sign(<$AS.1, ~epoch, nB.1>, ~ltk.2) ) @ #vk.22 )
+            case ASAS_B_send
+            solve( !KU( aenc(<key, $A.1>, pk(~ltk)) ) @ #vk.15 )
+              case ASAS_A_send
+              solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch.1), $A), $E.1, $E)
+                     ) @ #vk.15 )
+                case c_drkey_so
+                solve( !KU( sign(<$A.1, ~epoch.1, nB.2>, ~ltk.1) ) @ #vk.29 )
+                  case ASAS_B_send
+                  solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.30 )
+                    case ASAS_A_send
+                    solve( !KU( ~ltk.1 ) @ #vk.33 )
+                      case Reveal_ltk
+                      solve( In_S( $E, $A,
+                                   <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #vr )
+                        case ChanIn_S
+                        by solve( !KU( ~req_id ) @ #vk.19 )
+                      qed
+                    qed
+                  next
+                    case c_drkey
+                    solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.33 )
+                      case c_secret_value
+                      solve( In_S( $E, $A,
+                                   <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #vr )
+                        case ChanIn_S
+                        by solve( !KU( ~req_id ) @ #vk.19 )
+                      qed
+                    qed
+                  qed
+                next
+                  case c_sign
+                  solve( !KU( ~ltk.1 ) @ #vk.33 )
+                    case Reveal_ltk
+                    solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.31 )
+                      case ASAS_A_send
+                      solve( In_S( $E, $A,
+                                   <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #vr )
+                        case ChanIn_S
+                        by solve( !KU( ~req_id ) @ #vk.19 )
+                      qed
+                    next
+                      case c_drkey
+                      solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.34 )
+                        case c_secret_value
+                        solve( In_S( $E, $A,
+                                     <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                      ~epoch, nH>
+                               ) ▶₁ #vr )
+                          case ChanIn_S
+                          by solve( !KU( ~req_id ) @ #vk.20 )
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            next
+              case c_aenc
+              solve( In_S( $E, $A,
+                           <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                            ~epoch, nH>
+                     ) ▶₁ #vr )
+                case ChanIn_S
+                by solve( !KU( ~req_id ) @ #vk.14 )
+              qed
+            qed
+          next
+            case c_sign
+            solve( !KU( ~ltk.2 ) @ #vk.23 )
+              case Reveal_ltk
+              solve( !KU( aenc(<key, $A.1>, pk(~ltk)) ) @ #vk.17 )
+                case ASAS_A_send
+                solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch.1), $A), $E.1, $E)
+                       ) @ #vk.16 )
+                  case c_drkey_so
+                  solve( !KU( sign(<$A.1, ~epoch.1, nB.2>, ~ltk.1) ) @ #vk.30 )
+                    case ASAS_B_send
+                    solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.31 )
+                      case ASAS_A_send
+                      solve( !KU( ~ltk.1 ) @ #vk.34 )
+                        case Reveal_ltk
+                        solve( In_S( $E, $A,
+                                     <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                      ~epoch, nH>
+                               ) ▶₁ #vr )
+                          case ChanIn_S
+                          by solve( !KU( ~req_id ) @ #vk.20 )
+                        qed
+                      qed
+                    next
+                      case c_drkey
+                      solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.34 )
+                        case c_secret_value
+                        solve( In_S( $E, $A,
+                                     <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                      ~epoch, nH>
+                               ) ▶₁ #vr )
+                          case ChanIn_S
+                          by solve( !KU( ~req_id ) @ #vk.20 )
+                        qed
+                      qed
+                    qed
+                  next
+                    case c_sign
+                    solve( !KU( ~ltk.1 ) @ #vk.34 )
+                      case Reveal_ltk
+                      solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.32 )
+                        case ASAS_A_send
+                        solve( In_S( $E, $A,
+                                     <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                      ~epoch, nH>
+                               ) ▶₁ #vr )
+                          case ChanIn_S
+                          by solve( !KU( ~req_id ) @ #vk.20 )
+                        qed
+                      next
+                        case c_drkey
+                        solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.35 )
+                          case c_secret_value
+                          solve( In_S( $E, $A,
+                                       <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                        ~epoch, nH>
+                                 ) ▶₁ #vr )
+                            case ChanIn_S
+                            by solve( !KU( ~req_id ) @ #vk.21 )
+                          qed
+                        qed
+                      qed
+                    qed
+                  qed
+                qed
+              next
+                case c_aenc
+                solve( In_S( $E, $A,
+                             <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                              ~epoch, nH>
+                       ) ▶₁ #vr )
+                  case ChanIn_S
+                  by solve( !KU( ~req_id ) @ #vk.15 )
+                qed
+              qed
+            qed
+          qed
+        next
+          case c_exp_time
+          solve( !KU( aenc(<key, $A.1>, pk(~ltk)) ) @ #vk.14 )
+            case ASAS_A_send
+            solve( !KU( drkey_so(drkey(secret_value(~ltk, ~epoch.1), $A), $E.1, $E)
+                   ) @ #vk.12 )
+              case c_drkey_so
+              solve( !KU( sign(<$A.1, ~epoch.1, nB.1>, ~ltk.1) ) @ #vk.23 )
+                case ASAS_B_send
+                solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.24 )
+                  case ASAS_A_send
+                  solve( !KU( ~ltk.1 ) @ #vk.27 )
+                    case Reveal_ltk
+                    solve( In_S( $E, $A,
+                                 <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #vr )
+                      case ChanIn_S
+                      by solve( !KU( ~req_id ) @ #vk.17 )
+                    qed
+                  qed
+                next
+                  case c_drkey
+                  solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.27 )
+                    case c_secret_value
+                    solve( In_S( $E, $A,
+                                 <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #vr )
+                      case ChanIn_S
+                      by solve( !KU( ~req_id ) @ #vk.17 )
+                    qed
+                  qed
+                qed
+              next
+                case c_sign
+                solve( !KU( ~ltk.1 ) @ #vk.27 )
+                  case Reveal_ltk
+                  solve( !KU( drkey(secret_value(~ltk, ~epoch.1), $A) ) @ #vk.25 )
+                    case ASAS_A_send
+                    solve( In_S( $E, $A,
+                                 <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #vr )
+                      case ChanIn_S
+                      by solve( !KU( ~req_id ) @ #vk.17 )
+                    qed
+                  next
+                    case c_drkey
+                    solve( !KU( secret_value(~ltk, ~epoch.1) ) @ #vk.28 )
+                      case c_secret_value
+                      solve( In_S( $E, $A,
+                                   <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #vr )
+                        case ChanIn_S
+                        by solve( !KU( ~req_id ) @ #vk.18 )
+                      qed
+                    qed
+                  qed
+                qed
+              qed
+            qed
+          next
+            case c_aenc
+            solve( In_S( $E, $A,
+                         <'R_to_AS', <key_type, req_id, proto, <$A.1, $E.1>, <$A, $E>, add>, 
+                          ~epoch, nH>
+                   ) ▶₁ #vr )
+              case ChanIn_S
+              by solve( !KU( ~req_id ) @ #vk.12 )
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_L_request
+  solve( St_L_0( L, id, epoch, AS_L, AS_R, R ) ▶₀ #i )
+    case ASHOST_L_init
+    by solve( !KU( ~req_id ) @ #vk.6 )
+  qed
+next
+  case ASHOST_R_request
+  solve( St_R_0( R, id, epoch, AS_R, AS_L, L ) ▶₀ #i )
+    case ASHOST_R_init
+    by solve( !KU( ~req_id ) @ #vk.6 )
+  qed
+qed
+
+lemma CHAN_secret_receiver:
+  all-traces "∀ n #i #j. ((Secret_R( n ) @ #i) ∧ (K( n ) @ #j)) ⇒ (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ n #i #j. (Secret_R( n ) @ #i) ∧ (K( n ) @ #j)"
+*/
+simplify
+solve( Secret_R( n ) @ #i )
+  case ASHOST_AS_L_receive
+  solve( St_AS_L_0( AS_L, id, epoch, AS_R, ltk ) ▶₀ #i )
+    case ASAS_to_ASHOST_LOCAL
+    solve( !AsHostMapping( $AS.1, R ) ▶₂ #i )
+      case Register_host
+      solve( !AsHostMapping( $AS, L ) ▶₃ #i )
+        case Register_host
+        solve( !KU( sign(<$AS, ~epoch, nB>, ~ltk) ) @ #vk.25 )
+          case ASAS_B_send
+          solve( In_S( $E, $AS,
+                       <'L_to_AS', <key_type, req_id, proto, <$AS, $E>, <$AS.1, $E.1>, add>, 
+                        ~epoch, nH>
+                 ) ▶₁ #i )
+            case ChanIn_S
+            by solve( !KU( ~req_id ) @ #vk.8 )
+          qed
+        next
+          case c_sign
+          solve( !KU( ~ltk ) @ #vk.26 )
+            case Reveal_ltk
+            solve( In_S( $E, $AS,
+                         <'L_to_AS', <key_type, req_id, proto, <$AS, $E>, <$AS.1, $E.1>, add>, 
+                          ~epoch, nH>
+                   ) ▶₁ #i )
+              case ChanIn_S
+              by solve( !KU( ~req_id ) @ #vk.9 )
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_AS_R_receive
+  solve( St_AS_R_0( AS_R, id, epoch, AS_L, key ) ▶₀ #i )
+    case ASAS_to_ASHOST_REMOTE
+    solve( !AsHostMapping( $AS.1, L ) ▶₂ #i )
+      case Register_host
+      solve( !AsHostMapping( $AS, R ) ▶₃ #i )
+        case Register_host
+        solve( !KU( sign(<aenc(<key, $AS.1>, pk(~ltkB)), exp_time(~epoch), ~nB>,
+                         ~ltk)
+               ) @ #vk.27 )
+          case ASAS_A_send
+          solve( In_S( $E, $AS,
+                       <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                        ~epoch, nH>
+                 ) ▶₁ #i )
+            case ChanIn_S
+            by solve( !KU( ~req_id ) @ #vk.8 )
+          qed
+        next
+          case c_sign
+          solve( !KU( ~ltk ) @ #vk.28 )
+            case Reveal_ltk
+            solve( !KU( aenc(<key, $AS.1>, pk(~ltkB)) ) @ #vk.25 )
+              case ASAS_A_send
+              solve( !KU( sign(<$AS.1, ~epoch.1, nB.1>, ~ltkB) ) @ #vk.34 )
+                case ASAS_B_send
+                solve( !KU( exp_time(~epoch) ) @ #vk.30 )
+                  case ASAS_A_send
+                  solve( !KU( sign(<$AS.3, ~epoch, nB.2>, ~ltk.1) ) @ #vk.40 )
+                    case ASAS_B_send
+                    solve( In_S( $E, $AS,
+                                 <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #i )
+                      case ChanIn_S
+                      by solve( !KU( ~req_id ) @ #vk.17 )
+                    qed
+                  next
+                    case c_sign
+                    solve( !KU( ~ltk.1 ) @ #vk.41 )
+                      case Reveal_ltk
+                      solve( In_S( $E, $AS,
+                                   <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #i )
+                        case ChanIn_S
+                        by solve( !KU( ~req_id ) @ #vk.18 )
+                      qed
+                    qed
+                  qed
+                next
+                  case c_exp_time
+                  solve( In_S( $E, $AS,
+                               <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                ~epoch, nH>
+                         ) ▶₁ #i )
+                    case ChanIn_S
+                    by solve( !KU( ~req_id ) @ #vk.15 )
+                  qed
+                qed
+              next
+                case c_sign
+                solve( !KU( ~ltkB ) @ #vk.35 )
+                  case Reveal_ltk
+                  solve( !KU( exp_time(~epoch) ) @ #vk.31 )
+                    case ASAS_A_send
+                    solve( !KU( sign(<$AS.3, ~epoch, nB.2>, ~ltk.1) ) @ #vk.41 )
+                      case ASAS_B_send
+                      solve( In_S( $E, $AS,
+                                   <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #i )
+                        case ChanIn_S
+                        by solve( !KU( ~req_id ) @ #vk.18 )
+                      qed
+                    next
+                      case c_sign
+                      solve( !KU( ~ltk.1 ) @ #vk.42 )
+                        case Reveal_ltk
+                        solve( In_S( $E, $AS,
+                                     <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                      ~epoch, nH>
+                               ) ▶₁ #i )
+                          case ChanIn_S
+                          by solve( !KU( ~req_id ) @ #vk.19 )
+                        qed
+                      qed
+                    qed
+                  next
+                    case c_exp_time
+                    solve( In_S( $E, $AS,
+                                 <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #i )
+                      case ChanIn_S
+                      by solve( !KU( ~req_id ) @ #vk.16 )
+                    qed
+                  qed
+                qed
+              qed
+            next
+              case c_aenc
+              solve( !KU( exp_time(~epoch) ) @ #vk.28 )
+                case ASAS_A_send
+                solve( !KU( sign(<$AS.3, ~epoch, nB.1>, ~ltk.1) ) @ #vk.37 )
+                  case ASAS_B_send
+                  solve( In_S( $E, $AS,
+                               <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                ~epoch, nH>
+                         ) ▶₁ #i )
+                    case ChanIn_S
+                    by solve( !KU( ~req_id ) @ #vk.15 )
+                  qed
+                next
+                  case c_sign
+                  solve( !KU( ~ltk.1 ) @ #vk.38 )
+                    case Reveal_ltk
+                    solve( In_S( $E, $AS,
+                                 <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #i )
+                      case ChanIn_S
+                      by solve( !KU( ~req_id ) @ #vk.16 )
+                    qed
+                  qed
+                qed
+              next
+                case c_exp_time
+                solve( In_S( $E, $AS,
+                             <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                              ~epoch, nH>
+                       ) ▶₁ #i )
+                  case ChanIn_S
+                  by solve( !KU( ~req_id ) @ #vk.13 )
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_L_receive
+  solve( St_L_1( L, id, epoch, AS_L, AS_R, R, req_id, nH ) ▶₀ #i )
+    case ASHOST_L_request
+    solve( In_S( $A, $E, <'AS_to_L', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      by solve( !KU( ~req_id ) @ #vk.3 )
+    qed
+  qed
+next
+  case ASHOST_R_receive
+  solve( St_R_1( R, id, epoch, AS_R, AS_L, L, req_id, nH ) ▶₀ #i )
+    case ASHOST_R_request
+    solve( In_S( $A, $E, <'AS_to_R', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #i )
+      case ChanIn_S
+      by solve( !KU( ~req_id ) @ #vk.3 )
+    qed
+  qed
+qed
+
+lemma CHAN_message_authentication:
+  all-traces
+  "∀ I n #j.
+    (Authentic( I, n ) @ #j) ⇒ (∃ #i. (Send( I, n ) @ #i) ∧ (#i < #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ I n #j.
+  (Authentic( I, n ) @ #j) ∧ ∀ #i. (Send( I, n ) @ #i) ⇒ ¬(#i < #j)"
+*/
+simplify
+solve( Authentic( I, n ) @ #j )
+  case ASHOST_AS_L_receive
+  solve( St_AS_L_0( AS_L, id, epoch, AS_R, ltk ) ▶₀ #j )
+    case ASAS_to_ASHOST_LOCAL
+    solve( !AsHostMapping( $AS.1, R ) ▶₂ #j )
+      case Register_host
+      solve( !AsHostMapping( $AS, I ) ▶₃ #j )
+        case Register_host
+        solve( !KU( sign(<$AS, ~epoch, nB>, ~ltk) ) @ #vk.6 )
+          case ASAS_B_send
+          solve( In_S( $E, $AS,
+                       <'L_to_AS', <key_type, req_id, proto, <$AS, $E>, <$AS.1, $E.1>, add>, 
+                        ~epoch, nH>
+                 ) ▶₁ #j )
+            case ChanIn_S
+            by contradiction /* from formulas */
+          qed
+        next
+          case c_sign
+          solve( !KU( ~ltk ) @ #vk.7 )
+            case Reveal_ltk
+            solve( In_S( $E, $AS,
+                         <'L_to_AS', <key_type, req_id, proto, <$AS, $E>, <$AS.1, $E.1>, add>, 
+                          ~epoch, nH>
+                   ) ▶₁ #j )
+              case ChanIn_S
+              by contradiction /* from formulas */
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_AS_R_receive
+  solve( St_AS_R_0( AS_R, id, epoch, AS_L, key ) ▶₀ #j )
+    case ASAS_to_ASHOST_REMOTE
+    solve( !AsHostMapping( $AS.1, L ) ▶₂ #j )
+      case Register_host
+      solve( !AsHostMapping( $AS, I ) ▶₃ #j )
+        case Register_host
+        solve( !KU( sign(<aenc(<key, $AS.1>, pk(~ltkB)), exp_time(~epoch), ~nB>,
+                         ~ltk)
+               ) @ #vk.6 )
+          case ASAS_A_send
+          solve( In_S( $E, $AS,
+                       <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                        ~epoch, nH>
+                 ) ▶₁ #j )
+            case ChanIn_S
+            by contradiction /* from formulas */
+          qed
+        next
+          case c_sign
+          solve( !KU( ~ltk ) @ #vk.7 )
+            case Reveal_ltk
+            solve( !KU( aenc(<key, $AS.1>, pk(~ltkB)) ) @ #vk.4 )
+              case ASAS_A_send
+              solve( !KU( sign(<$AS.1, ~epoch.1, nB.1>, ~ltkB) ) @ #vk.14 )
+                case ASAS_B_send
+                solve( !KU( exp_time(~epoch) ) @ #vk.7 )
+                  case ASAS_A_send
+                  solve( !KU( sign(<$AS.3, ~epoch, nB.2>, ~ltk.1) ) @ #vk.21 )
+                    case ASAS_B_send
+                    solve( In_S( $E, $AS,
+                                 <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #j )
+                      case ChanIn_S
+                      by contradiction /* from formulas */
+                    qed
+                  next
+                    case c_sign
+                    solve( !KU( ~ltk.1 ) @ #vk.22 )
+                      case Reveal_ltk
+                      solve( In_S( $E, $AS,
+                                   <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #j )
+                        case ChanIn_S
+                        by contradiction /* from formulas */
+                      qed
+                    qed
+                  qed
+                next
+                  case c_exp_time
+                  solve( In_S( $E, $AS,
+                               <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                ~epoch, nH>
+                         ) ▶₁ #j )
+                    case ChanIn_S
+                    by contradiction /* from formulas */
+                  qed
+                qed
+              next
+                case c_sign
+                solve( !KU( ~ltkB ) @ #vk.15 )
+                  case Reveal_ltk
+                  solve( !KU( exp_time(~epoch) ) @ #vk.9 )
+                    case ASAS_A_send
+                    solve( !KU( sign(<$AS.3, ~epoch, nB.2>, ~ltk.1) ) @ #vk.22 )
+                      case ASAS_B_send
+                      solve( In_S( $E, $AS,
+                                   <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                    ~epoch, nH>
+                             ) ▶₁ #j )
+                        case ChanIn_S
+                        by contradiction /* from formulas */
+                      qed
+                    next
+                      case c_sign
+                      solve( !KU( ~ltk.1 ) @ #vk.23 )
+                        case Reveal_ltk
+                        solve( In_S( $E, $AS,
+                                     <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                      ~epoch, nH>
+                               ) ▶₁ #j )
+                          case ChanIn_S
+                          by contradiction /* from formulas */
+                        qed
+                      qed
+                    qed
+                  next
+                    case c_exp_time
+                    solve( In_S( $E, $AS,
+                                 <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #j )
+                      case ChanIn_S
+                      by contradiction /* from formulas */
+                    qed
+                  qed
+                qed
+              qed
+            next
+              case c_aenc
+              solve( !KU( exp_time(~epoch) ) @ #vk.6 )
+                case ASAS_A_send
+                solve( !KU( sign(<$AS.3, ~epoch, nB.1>, ~ltk.1) ) @ #vk.18 )
+                  case ASAS_B_send
+                  solve( In_S( $E, $AS,
+                               <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                ~epoch, nH>
+                         ) ▶₁ #j )
+                    case ChanIn_S
+                    by contradiction /* from formulas */
+                  qed
+                next
+                  case c_sign
+                  solve( !KU( ~ltk.1 ) @ #vk.19 )
+                    case Reveal_ltk
+                    solve( In_S( $E, $AS,
+                                 <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                                  ~epoch, nH>
+                           ) ▶₁ #j )
+                      case ChanIn_S
+                      by contradiction /* from formulas */
+                    qed
+                  qed
+                qed
+              next
+                case c_exp_time
+                solve( In_S( $E, $AS,
+                             <'R_to_AS', <key_type, req_id, proto, <$AS.1, $E.1>, <$AS, $E>, add>, 
+                              ~epoch, nH>
+                       ) ▶₁ #j )
+                  case ChanIn_S
+                  by contradiction /* from formulas */
+                qed
+              qed
+            qed
+          qed
+        qed
+      qed
+    qed
+  qed
+next
+  case ASHOST_L_receive
+  solve( St_L_1( L, id, epoch, I, AS_R, R, req_id, nH ) ▶₀ #j )
+    case ASHOST_L_request
+    solve( In_S( $A, $E, <'AS_to_L', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #j )
+      case ChanIn_S
+      by contradiction /* from formulas */
+    qed
+  qed
+next
+  case ASHOST_R_receive
+  solve( St_R_1( R, id, epoch, I, AS_L, L, req_id, nH ) ▶₀ #j )
+    case ASHOST_R_request
+    solve( In_S( $A, $E, <'AS_to_R', ~req_id, key, exp_time(~epoch), ~nH>
+           ) ▶₁ #j )
+      case ChanIn_S
+      by contradiction /* from formulas */
+    qed
+  qed
+qed
+
+/* All well-formedness checks were successful. */
+
+end
