@@ -9,6 +9,6 @@ In the file `second-order-request.spthy`, the model is refined with multiple key
 between AS and end host is modeled as well.
 
 ### Credits
-- Main work by Dominik Roos (Oncilla)
+- Main work by Dominik Roos ([Oncilla](https://github.com/Oncilla/))
 - Thanks to Ralf Sasse, Joel Wanner and Dennis Jackson for help with the verification and suggestions for improvements
 
